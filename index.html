@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Billing App</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
+
+  .header { background: linear-gradient(135deg, #1a237e, #283593); color: #fff; padding: 20px 30px; display: flex; align-items: center; gap: 15px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+  .header h1 { font-size: 1.6rem; font-weight: 600; }
+  .header .subtitle { font-size: .85rem; opacity: .8; margin-top: 2px; }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 25px; }
+
+  /* Upload Area */
+  .upload-area { background: #fff; border: 2px dashed #90caf9; border-radius: 12px; padding: 50px 30px; text-align: center; cursor: pointer; transition: .2s; margin-bottom: 25px; }
+  .upload-area:hover, .upload-area.dragover { border-color: #1a237e; background: #e8eaf6; }
+  .upload-area svg { width: 48px; height: 48px; fill: #1a237e; margin-bottom: 12px; }
+  .upload-area p { font-size: 1rem; color: #555; }
+  .upload-area .hint { font-size: .8rem; color: #999; margin-top: 6px; }
+  #fileInput { display: none; }
+
+  /* Pricing Table */
+  .pricing-card { background: #fff; border-radius: 12px; padding: 20px 25px; margin-bottom: 25px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .pricing-card h3 { margin-bottom: 12px; color: #1a237e; font-size: 1rem; }
+  .pricing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; font-size: .82rem; }
+  .pricing-row { display: flex; justify-content: space-between; padding: 4px 10px; border-radius: 4px; background: #f5f5f5; }
+  .pricing-row span:last-child { font-weight: 600; color: #2e7d32; }
+
+  /* Summary Cards */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
+  .summary-card { background: #fff; border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .summary-card .label { font-size: .78rem; text-transform: uppercase; color: #888; letter-spacing: .5px; }
+  .summary-card .value { font-size: 1.6rem; font-weight: 700; color: #1a237e; margin-top: 4px; }
+  .summary-card.total { background: linear-gradient(135deg, #1a237e, #283593); color: #fff; }
+  .summary-card.total .label { color: rgba(255,255,255,.7); }
+  .summary-card.total .value { color: #fff; }
+
+  /* Attempt Breakdown */
+  .breakdown { background: #fff; border-radius: 12px; padding: 20px 25px; margin-bottom: 25px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .breakdown h3 { margin-bottom: 14px; color: #1a237e; font-size: 1rem; }
+  .attempt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .attempt-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px 16px; }
+  .attempt-card .attempt-name { font-weight: 600; font-size: .9rem; color: #1a237e; margin-bottom: 8px; }
+  .attempt-card .stat { display: flex; justify-content: space-between; font-size: .82rem; padding: 2px 0; }
+  .attempt-card .stat .val { font-weight: 600; }
+  .attempt-card .cost-line { border-top: 1px solid #e0e0e0; margin-top: 8px; padding-top: 8px; display: flex; justify-content: space-between; font-weight: 700; color: #2e7d32; }
+
+  /* Data Table */
+  .table-section { background: #fff; border-radius: 12px; padding: 20px 25px; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
+  .table-section h3 { margin-bottom: 14px; color: #1a237e; font-size: 1rem; }
+  .table-controls { display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .table-controls input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: .85rem; flex: 1; min-width: 200px; }
+  .table-controls select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: .85rem; background: #fff; }
+  .table-controls .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: .85rem; cursor: pointer; background: #1a237e; color: #fff; }
+  .table-controls .btn:hover { background: #283593; }
+  .table-wrap { overflow-x: auto; max-height: 500px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  thead th { position: sticky; top: 0; background: #1a237e; color: #fff; padding: 10px 12px; text-align: left; white-space: nowrap; z-index: 1; }
+  tbody td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }
+  tbody tr:hover { background: #e8eaf6; }
+  .cost-cell { color: #2e7d32; font-weight: 600; }
+  .total-cost-cell { color: #c62828; font-weight: 700; }
+  .dur-cell { color: #1565c0; }
+  .zero-cell { color: #999; }
+
+  .hidden { display: none !important; }
+
+  /* Pricing Editor */
+  .pricing-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+  .pricing-header h3 { margin-bottom: 0; }
+  .pricing-actions { display: flex; gap: 8px; }
+  .btn-sm { padding: 6px 14px; border: none; border-radius: 6px; font-size: .8rem; cursor: pointer; font-weight: 500; transition: .15s; }
+  .btn-edit { background: #e8eaf6; color: #1a237e; }
+  .btn-edit:hover { background: #c5cae9; }
+  .btn-add { background: #e8f5e9; color: #2e7d32; }
+  .btn-add:hover { background: #c8e6c9; }
+  .btn-reset { background: #fce4ec; color: #c62828; }
+  .btn-reset:hover { background: #f8bbd0; }
+  .btn-save { background: #1a237e; color: #fff; }
+  .btn-save:hover { background: #283593; }
+  .btn-cancel { background: #eee; color: #555; }
+  .btn-cancel:hover { background: #ddd; }
+  .btn-delete { background: none; border: none; color: #c62828; cursor: pointer; font-size: 1.1rem; padding: 2px 6px; border-radius: 4px; }
+  .btn-delete:hover { background: #fce4ec; }
+
+  .pricing-edit-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: 10px; }
+  .pricing-edit-table th { background: #f5f5f5; padding: 8px 10px; text-align: left; font-weight: 600; color: #555; border-bottom: 2px solid #e0e0e0; }
+  .pricing-edit-table td { padding: 5px 6px; border-bottom: 1px solid #f0f0f0; }
+  .pricing-edit-table input[type="number"] { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 5px; font-size: .85rem; text-align: right; }
+  .pricing-edit-table input[type="number"]:focus { outline: none; border-color: #1a237e; box-shadow: 0 0 0 2px rgba(26,35,126,.15); }
+  .pricing-edit-table tr:hover { background: #fafafa; }
+  .pricing-edit-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #e0e0e0; }
+  .pricing-edit-note { font-size: .78rem; color: #999; margin-top: 8px; }
+
+  .pricing-row-display { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; font-size: .82rem; }
+
+  /* Progress Overlay */
+  .progress-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(3px); }
+  .progress-box { background: #fff; border-radius: 14px; padding: 35px 40px; min-width: 380px; max-width: 480px; box-shadow: 0 8px 32px rgba(0,0,0,.25); text-align: center; }
+  .progress-box h3 { font-size: 1.1rem; color: #1a237e; margin-bottom: 18px; }
+  .progress-steps { text-align: left; margin-bottom: 20px; }
+  .progress-step { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: .88rem; color: #999; transition: .2s; }
+  .progress-step.active { color: #1a237e; font-weight: 600; }
+  .progress-step.done { color: #2e7d32; }
+  .progress-step .step-icon { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #ddd; display: flex; align-items: center; justify-content: center; font-size: .7rem; flex-shrink: 0; transition: .2s; }
+  .progress-step.active .step-icon { border-color: #1a237e; background: #e8eaf6; }
+  .progress-step.done .step-icon { border-color: #2e7d32; background: #e8f5e9; }
+  .progress-bar-wrap { background: #e0e0e0; border-radius: 8px; height: 10px; overflow: hidden; margin-bottom: 10px; }
+  .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #1a237e, #42a5f5); border-radius: 8px; transition: width .35s ease; width: 0%; }
+  .progress-percent { font-size: .82rem; color: #666; }
+  .progress-detail { font-size: .78rem; color: #999; margin-top: 4px; }
+
+  /* Spinner for active step */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner-icon { width: 16px; height: 16px; border: 2px solid #c5cae9; border-top-color: #1a237e; border-radius: 50%; animation: spin .7s linear infinite; }
+
+  /* Pagination */
+  .pagination { display: flex; gap: 6px; align-items: center; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+  .pagination button { padding: 6px 12px; border: 1px solid #ddd; border-radius: 4px; background: #fff; cursor: pointer; font-size: .82rem; }
+  .pagination button.active { background: #1a237e; color: #fff; border-color: #1a237e; }
+  .pagination button:disabled { opacity: .4; cursor: default; }
+  .page-info { font-size: .82rem; color: #666; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Billing Calculator</h1>
+    <div class="subtitle">Upload CSV / Excel &rarr; Auto-calculate billing from duration attempts</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Pricing Reference -->
+  <div class="pricing-card">
+    <div class="pricing-header">
+      <h3>Pricing Structure (Duration in seconds &rarr; Cost in &#8377;)</h3>
+      <div class="pricing-actions" id="pricingViewActions">
+        <button class="btn-sm btn-edit" onclick="enterEditMode()">Edit Pricing</button>
+        <button class="btn-sm btn-reset" onclick="resetPricing()">Reset Default</button>
+      </div>
+    </div>
+    <!-- View Mode -->
+    <div id="pricingViewMode">
+      <div class="pricing-row-display" id="pricingGrid"></div>
+    </div>
+    <!-- Edit Mode -->
+    <div id="pricingEditMode" class="hidden">
+      <table class="pricing-edit-table">
+        <thead><tr><th>Max Duration (sec)</th><th>Cost (&#8377;)</th><th></th></tr></thead>
+        <tbody id="pricingEditBody"></tbody>
+      </table>
+      <div class="pricing-edit-note">Rows are auto-sorted by max duration. Durations must not overlap.</div>
+      <div class="pricing-edit-footer">
+        <button class="btn-sm btn-add" onclick="addPricingRow()">+ Add Slab</button>
+        <button class="btn-sm btn-cancel" onclick="cancelEdit()">Cancel</button>
+        <button class="btn-sm btn-save" onclick="savePricing()">Save &amp; Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload -->
+  <div class="upload-area" id="uploadArea">
+    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h5v7h7v9H6zm3-7h6v2H9v-2zm0 3h6v2H9v-2z"/></svg>
+    <p>Click or drag &amp; drop your <strong>CSV / Excel (.xlsx)</strong> file here</p>
+    <div class="hint">File should contain columns like DURATION_1_ATTEMPT, DURATION_2_ATTEMPT, etc.</div>
+    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls">
+  </div>
+
+  <!-- Progress Overlay -->
+  <div class="progress-overlay hidden" id="progressOverlay">
+    <div class="progress-box">
+      <h3 id="progressTitle">Processing File...</h3>
+      <div class="progress-steps" id="progressSteps"></div>
+      <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar"></div></div>
+      <div class="progress-percent" id="progressPercent">0%</div>
+      <div class="progress-detail" id="progressDetail"></div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary hidden" id="summarySection">
+    <div class="summary-card"><div class="label">Total Records</div><div class="value" id="totalRecords">0</div></div>
+    <div class="summary-card"><div class="label">Attempts Found</div><div class="value" id="totalAttempts">0</div></div>
+    <div class="summary-card total"><div class="label">Grand Total Cost</div><div class="value" id="grandTotal">&#8377; 0.00</div></div>
+  </div>
+
+  <!-- Attempt Breakdown -->
+  <div class="breakdown hidden" id="breakdownSection">
+    <h3>Attempt-wise Billing Breakdown</h3>
+    <div class="attempt-cards" id="attemptCards"></div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-section hidden" id="tableSection">
+    <h3>Row-wise Billing Details</h3>
+    <div class="table-controls">
+      <input type="text" id="searchInput" placeholder="Search rows...">
+      <select id="pageSizeSelect">
+        <option value="25">25 rows</option>
+        <option value="50">50 rows</option>
+        <option value="100">100 rows</option>
+        <option value="500">500 rows</option>
+      </select>
+      <button class="btn" id="exportBtn">Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+
+</div>
+
+<!-- SheetJS for Excel parsing -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+
+<script>
+const DEFAULT_PRICING = [
+  [7, 0], [15, 0.75], [30, 1.50], [60, 2.50], [90, 4.00],
+  [120, 5.50], [150, 7.00], [180, 8.50], [210, 10.00], [240, 11.50],
+  [270, 13.00], [300, 14.50], [330, 16.00], [360, 17.50], [390, 19.00],
+  [420, 20.50], [450, 22.00], [480, 23.50], [999, 25.00]
+];
+
+// Load from localStorage or use default
+let PRICING = JSON.parse(localStorage.getItem('billingPricing')) || JSON.parse(JSON.stringify(DEFAULT_PRICING));
+
+function getCost(duration) {
+  if (duration == null || isNaN(duration) || duration === '' || duration === 0) return 0;
+  const d = Math.abs(Number(duration));
+  for (const [max, cost] of PRICING) {
+    if (d <= max) return cost;
+  }
+  return PRICING.length ? PRICING[PRICING.length - 1][1] : 0;
+}
+
+function fmt(n) { return '\u20B9 ' + Number(n).toFixed(2); }
+
+// Render pricing display grid
+function renderPricingGrid() {
+  const pricingGrid = document.getElementById('pricingGrid');
+  pricingGrid.innerHTML = '';
+  let prevMax = 0;
+  PRICING.forEach(([max, cost]) => {
+    const row = document.createElement('div');
+    row.className = 'pricing-row';
+    row.innerHTML = `<span>${prevMax} \u2013 ${max} sec</span><span>${fmt(cost)}</span>`;
+    pricingGrid.appendChild(row);
+    prevMax = max + 1;
+  });
+}
+
+// --- Pricing Edit Mode ---
+function enterEditMode() {
+  document.getElementById('pricingViewMode').classList.add('hidden');
+  document.getElementById('pricingViewActions').classList.add('hidden');
+  document.getElementById('pricingEditMode').classList.remove('hidden');
+  renderEditTable();
+}
+
+function cancelEdit() {
+  document.getElementById('pricingEditMode').classList.add('hidden');
+  document.getElementById('pricingViewMode').classList.remove('hidden');
+  document.getElementById('pricingViewActions').classList.remove('hidden');
+}
+
+function renderEditTable() {
+  const tbody = document.getElementById('pricingEditBody');
+  tbody.innerHTML = '';
+  PRICING.forEach(([max, cost], i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="number" min="1" step="1" value="${max}" data-idx="${i}" data-field="max"></td>
+      <td><input type="number" min="0" step="0.25" value="${cost}" data-idx="${i}" data-field="cost"></td>
+      <td><button class="btn-delete" onclick="deletePricingRow(${i})" title="Delete">&times;</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function addPricingRow() {
+  const lastMax = PRICING.length ? PRICING[PRICING.length - 1][0] : 0;
+  PRICING.push([lastMax + 30, 0]);
+  renderEditTable();
+  // Scroll to bottom of edit table
+  const tbody = document.getElementById('pricingEditBody');
+  const lastRow = tbody.lastElementChild;
+  if (lastRow) lastRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function deletePricingRow(idx) {
+  if (PRICING.length <= 1) return alert('Must have at least one pricing slab.');
+  PRICING.splice(idx, 1);
+  renderEditTable();
+}
+
+function savePricing() {
+  const inputs = document.querySelectorAll('#pricingEditBody input');
+  const newPricing = [];
+  const map = {};
+
+  inputs.forEach(inp => {
+    const idx = parseInt(inp.dataset.idx);
+    if (!map[idx]) map[idx] = {};
+    map[idx][inp.dataset.field] = parseFloat(inp.value);
+  });
+
+  for (const idx of Object.keys(map).sort((a, b) => a - b)) {
+    const m = map[idx];
+    if (isNaN(m.max) || m.max <= 0) return alert('Max duration must be a positive number.');
+    if (isNaN(m.cost) || m.cost < 0) return alert('Cost cannot be negative.');
+    newPricing.push([m.max, m.cost]);
+  }
+
+  // Sort by max duration
+  newPricing.sort((a, b) => a[0] - b[0]);
+
+  // Check for duplicate max values
+  for (let i = 1; i < newPricing.length; i++) {
+    if (newPricing[i][0] === newPricing[i - 1][0]) return alert(`Duplicate max duration: ${newPricing[i][0]}. Each slab must have a unique max.`);
+  }
+
+  PRICING = newPricing;
+  localStorage.setItem('billingPricing', JSON.stringify(PRICING));
+  renderPricingGrid();
+  cancelEdit();
+
+  // Recalculate if data is loaded
+  if (rawRows.length) processData(rawRows);
+}
+
+function resetPricing() {
+  if (!confirm('Reset pricing to default values?')) return;
+  PRICING = JSON.parse(JSON.stringify(DEFAULT_PRICING));
+  localStorage.removeItem('billingPricing');
+  renderPricingGrid();
+  if (rawRows.length) processData(rawRows);
+}
+
+renderPricingGrid();
+
+// Upload handling
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+let allRows = [];
+let headers = [];
+let durationCols = [];
+let costCols = [];
+let currentPage = 1;
+let filteredRows = [];
+let rawRows = []; // original parsed data for re-processing on pricing change
+
+// --- Progress System ---
+const STEPS = [
+  { id: 'read', label: 'Reading file' },
+  { id: 'parse', label: 'Parsing spreadsheet' },
+  { id: 'detect', label: 'Detecting duration columns' },
+  { id: 'calc', label: 'Calculating billing costs' },
+  { id: 'render', label: 'Rendering results' },
+];
+
+function showProgress(title) {
+  const overlay = document.getElementById('progressOverlay');
+  overlay.classList.remove('hidden');
+  document.getElementById('progressTitle').textContent = title || 'Processing File...';
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('progressPercent').textContent = '0%';
+  document.getElementById('progressDetail').textContent = '';
+  const stepsEl = document.getElementById('progressSteps');
+  stepsEl.innerHTML = STEPS.map(s =>
+    `<div class="progress-step" id="step-${s.id}">
+      <div class="step-icon" id="stepIcon-${s.id}"></div>
+      <span>${s.label}</span>
+    </div>`
+  ).join('');
+}
+
+function setStep(stepId, detail) {
+  const pct = { read: 10, parse: 30, detect: 45, calc: 70, render: 90 };
+  STEPS.forEach(s => {
+    const el = document.getElementById('step-' + s.id);
+    const icon = document.getElementById('stepIcon-' + s.id);
+    if (s.id === stepId) {
+      el.className = 'progress-step active';
+      icon.innerHTML = '<div class="spinner-icon"></div>';
+    } else if (pct[s.id] < pct[stepId]) {
+      el.className = 'progress-step done';
+      icon.innerHTML = '&#10003;';
+    } else {
+      el.className = 'progress-step';
+      icon.innerHTML = '';
+    }
+  });
+  document.getElementById('progressBar').style.width = pct[stepId] + '%';
+  document.getElementById('progressPercent').textContent = pct[stepId] + '%';
+  if (detail) document.getElementById('progressDetail').textContent = detail;
+}
+
+function completeProgress() {
+  STEPS.forEach(s => {
+    document.getElementById('step-' + s.id).className = 'progress-step done';
+    document.getElementById('stepIcon-' + s.id).innerHTML = '&#10003;';
+  });
+  document.getElementById('progressBar').style.width = '100%';
+  document.getElementById('progressPercent').textContent = '100%';
+  document.getElementById('progressDetail').textContent = 'Done!';
+  setTimeout(() => {
+    document.getElementById('progressOverlay').classList.add('hidden');
+  }, 600);
+}
+
+function setCalcProgress(done, total) {
+  const base = 45;
+  const range = 45; // 45% to 90%
+  const pct = Math.round(base + (done / total) * range);
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressPercent').textContent = pct + '%';
+  document.getElementById('progressDetail').textContent = `Row ${done.toLocaleString()} of ${total.toLocaleString()}`;
+}
+
+// yield control to let UI repaint
+function nextFrame() { return new Promise(r => requestAnimationFrame(r)); }
+
+function handleFile(file) {
+  showProgress('Processing: ' + file.name);
+  setStep('read', `File size: ${(file.size / 1024).toFixed(1)} KB`);
+
+  const reader = new FileReader();
+  reader.onprogress = function(e) {
+    if (e.lengthComputable) {
+      const pct = Math.round((e.loaded / e.total) * 20);
+      document.getElementById('progressBar').style.width = pct + '%';
+      document.getElementById('progressPercent').textContent = pct + '%';
+      document.getElementById('progressDetail').textContent =
+        `Reading: ${(e.loaded / 1024).toFixed(0)} / ${(e.total / 1024).toFixed(0)} KB`;
+    }
+  };
+  reader.onload = async function(e) {
+    setStep('parse', 'Parsing spreadsheet data...');
+    await nextFrame();
+
+    const data = new Uint8Array(e.target.result);
+    const wb = XLSX.read(data, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    if (!json.length) {
+      document.getElementById('progressOverlay').classList.add('hidden');
+      return alert('No data found in file.');
+    }
+    rawRows = json;
+    await processData(json);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function processData(rows) {
+  const isReprocess = document.getElementById('progressOverlay').classList.contains('hidden');
+  if (isReprocess) showProgress('Recalculating billing...');
+
+  setStep('detect', `${rows.length.toLocaleString()} rows found`);
+  await nextFrame();
+
+  headers = Object.keys(rows[0]);
+
+  // Find duration columns
+  durationCols = headers.filter(h => /duration.*attempt/i.test(h)).sort((a, b) => {
+    const na = parseInt(a.replace(/\D/g, '')) || 0;
+    const nb = parseInt(b.replace(/\D/g, '')) || 0;
+    return na - nb;
+  });
+
+  if (!durationCols.length) {
+    durationCols = headers.filter(h => /duration/i.test(h));
+  }
+
+  if (!durationCols.length) {
+    document.getElementById('progressOverlay').classList.add('hidden');
+    return alert('No DURATION columns found. Ensure columns are named like DURATION_1_ATTEMPT, DURATION_2_ATTEMPT, etc.');
+  }
+
+  costCols = durationCols.map(c => 'COST_' + c);
+
+  setStep('calc', `0 of ${rows.length.toLocaleString()} rows`);
+  await nextFrame();
+
+  // Calculate costs in batches to show progress
+  const BATCH = 500;
+  allRows = [];
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const end = Math.min(i + BATCH, rows.length);
+    for (let j = i; j < end; j++) {
+      const row = rows[j];
+      const newRow = { ...row };
+      let rowTotal = 0;
+      durationCols.forEach((dc, k) => {
+        const dur = parseFloat(row[dc]) || 0;
+        const cost = getCost(dur);
+        newRow[costCols[k]] = cost;
+        rowTotal += cost;
+      });
+      newRow['TOTAL_COST'] = rowTotal;
+      allRows.push(newRow);
+    }
+    setCalcProgress(end, rows.length);
+    if (end < rows.length) await nextFrame();
+  }
+
+  setStep('render', 'Building tables and charts...');
+  await nextFrame();
+
+  renderSummary();
+  renderBreakdown();
+  filteredRows = [...allRows];
+  currentPage = 1;
+  renderTable();
+
+  document.getElementById('summarySection').classList.remove('hidden');
+  document.getElementById('breakdownSection').classList.remove('hidden');
+  document.getElementById('tableSection').classList.remove('hidden');
+
+  completeProgress();
+}
+
+function renderSummary() {
+  document.getElementById('totalRecords').textContent = allRows.length.toLocaleString();
+  document.getElementById('totalAttempts').textContent = durationCols.length;
+  const grand = allRows.reduce((s, r) => s + r.TOTAL_COST, 0);
+  document.getElementById('grandTotal').textContent = fmt(grand);
+}
+
+function renderBreakdown() {
+  const container = document.getElementById('attemptCards');
+  container.innerHTML = '';
+
+  durationCols.forEach((dc, i) => {
+    const durations = allRows.map(r => parseFloat(r[dc]) || 0);
+    const costs = allRows.map(r => r[costCols[i]]);
+    const totalCost = costs.reduce((a, b) => a + b, 0);
+    const totalDur = durations.reduce((a, b) => a + b, 0);
+    const nonZero = durations.filter(d => d > 0);
+    const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
+    const maxDur = Math.max(...durations);
+
+    const num = dc.replace(/\D/g, '') || (i + 1);
+    const card = document.createElement('div');
+    card.className = 'attempt-card';
+    card.innerHTML = `
+      <div class="attempt-name">Attempt ${num}</div>
+      <div class="stat"><span>Column</span><span class="val">${dc}</span></div>
+      <div class="stat"><span>Non-zero entries</span><span class="val">${nonZero.length.toLocaleString()}</span></div>
+      <div class="stat"><span>Avg Duration</span><span class="val">${avgDur.toFixed(1)}s</span></div>
+      <div class="stat"><span>Max Duration</span><span class="val">${maxDur}s</span></div>
+      <div class="cost-line"><span>Total Cost</span><span>${fmt(totalCost)}</span></div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function renderTable() {
+  const pageSize = parseInt(document.getElementById('pageSizeSelect').value);
+  const totalPages = Math.ceil(filteredRows.length / pageSize) || 1;
+  if (currentPage > totalPages) currentPage = totalPages;
+
+  // Determine display columns: pick a few identifying cols + duration + cost cols
+  const idCols = headers.filter(h => !durationCols.includes(h)).slice(0, 3);
+  const displayCols = [...idCols, ...durationCols.flatMap((dc, i) => [dc, costCols[i]]), 'TOTAL_COST'];
+
+  // Head
+  const thead = document.getElementById('tableHead');
+  thead.innerHTML = '<tr>' + displayCols.map(c => `<th>${c}</th>`).join('') + '</tr>';
+
+  // Body
+  const start = (currentPage - 1) * pageSize;
+  const pageRows = filteredRows.slice(start, start + pageSize);
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = pageRows.map(row => {
+    return '<tr>' + displayCols.map(c => {
+      let val = row[c];
+      let cls = '';
+      if (c === 'TOTAL_COST') { val = fmt(val); cls = 'total-cost-cell'; }
+      else if (costCols.includes(c)) { val = fmt(val); cls = val === '\u20B9 0.00' ? 'zero-cell' : 'cost-cell'; }
+      else if (durationCols.includes(c)) { cls = Number(val) === 0 ? 'zero-cell' : 'dur-cell'; }
+      return `<td class="${cls}">${val}</td>`;
+    }).join('') + '</tr>';
+  }).join('');
+
+  // Pagination
+  const pag = document.getElementById('pagination');
+  let pagHTML = `<span class="page-info">Showing ${start + 1}\u2013${Math.min(start + pageSize, filteredRows.length)} of ${filteredRows.length.toLocaleString()}</span>`;
+  pagHTML += `<button ${currentPage === 1 ? 'disabled' : ''} onclick="goPage(1)">&laquo;</button>`;
+  pagHTML += `<button ${currentPage === 1 ? 'disabled' : ''} onclick="goPage(${currentPage - 1})">&lsaquo;</button>`;
+
+  const maxBtns = 5;
+  let startP = Math.max(1, currentPage - Math.floor(maxBtns / 2));
+  let endP = Math.min(totalPages, startP + maxBtns - 1);
+  if (endP - startP < maxBtns - 1) startP = Math.max(1, endP - maxBtns + 1);
+
+  for (let p = startP; p <= endP; p++) {
+    pagHTML += `<button class="${p === currentPage ? 'active' : ''}" onclick="goPage(${p})">${p}</button>`;
+  }
+  pagHTML += `<button ${currentPage === totalPages ? 'disabled' : ''} onclick="goPage(${currentPage + 1})">&rsaquo;</button>`;
+  pagHTML += `<button ${currentPage === totalPages ? 'disabled' : ''} onclick="goPage(${totalPages})">&raquo;</button>`;
+  pag.innerHTML = pagHTML;
+}
+
+function goPage(p) { currentPage = p; renderTable(); }
+
+// Search
+document.getElementById('searchInput').addEventListener('input', function() {
+  const q = this.value.toLowerCase();
+  filteredRows = q ? allRows.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q))) : [...allRows];
+  currentPage = 1;
+  renderTable();
+});
+
+document.getElementById('pageSizeSelect').addEventListener('change', () => { currentPage = 1; renderTable(); });
+
+// Export
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (!allRows.length) return;
+  const idCols = headers.filter(h => !durationCols.includes(h)).slice(0, 3);
+  const exportCols = [...idCols, ...durationCols.flatMap((dc, i) => [dc, costCols[i]]), 'TOTAL_COST'];
+
+  let csv = exportCols.join(',') + '\n';
+  allRows.forEach(row => {
+    csv += exportCols.map(c => {
+      let v = row[c];
+      if (typeof v === 'string' && v.includes(',')) v = `"${v}"`;
+      return v;
+    }).join(',') + '\n';
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'billing_output.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
