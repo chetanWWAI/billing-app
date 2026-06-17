@@ -41,12 +41,37 @@
   /* Attempt Breakdown */
   .breakdown { background: #fff; border-radius: 12px; padding: 20px 25px; margin-bottom: 25px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
   .breakdown h3 { margin-bottom: 14px; color: #1a237e; font-size: 1rem; }
-  .attempt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-  .attempt-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px 16px; }
-  .attempt-card .attempt-name { font-weight: 600; font-size: .9rem; color: #1a237e; margin-bottom: 8px; }
-  .attempt-card .stat { display: flex; justify-content: space-between; font-size: .82rem; padding: 2px 0; }
-  .attempt-card .stat .val { font-weight: 600; }
-  .attempt-card .cost-line { border-top: 1px solid #e0e0e0; margin-top: 8px; padding-top: 8px; display: flex; justify-content: space-between; font-weight: 700; color: #2e7d32; }
+  .attempt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .attempt-card { border: 1px solid #e0e0e0; border-radius: 10px; padding: 16px 20px; background: #fafafa; }
+  .attempt-card .attempt-name { font-weight: 700; font-size: 1rem; color: #1a237e; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e8eaf6; }
+  .attempt-card .stat { display: flex; justify-content: space-between; align-items: center; font-size: .84rem; padding: 4px 0; gap: 12px; }
+  .attempt-card .stat span:first-child { color: #555; white-space: nowrap; }
+  .attempt-card .stat .val { font-weight: 600; text-align: right; white-space: nowrap; }
+  .attempt-card .cost-line { border-top: 1px solid #e0e0e0; margin-top: 8px; padding-top: 8px; display: flex; justify-content: space-between; font-weight: 700; color: #2e7d32; font-size: .9rem; }
+  .attempt-card .attempt-sub-section { border-top: 1px solid #e0e0e0; margin-top: 10px; padding-top: 10px; }
+  .attempt-card .attempt-sub-title { font-weight: 700; font-size: .8rem; color: #fff; background: #1a237e; display: inline-block; padding: 2px 10px; border-radius: 4px; margin-bottom: 6px; }
+  .attempt-card .sub-stat { display: flex; justify-content: space-between; align-items: center; font-size: .8rem; padding: 3px 0; gap: 10px; }
+  .attempt-card .sub-stat span:first-child { color: #666; overflow: hidden; text-overflow: ellipsis; }
+  .attempt-card .sub-stat .sub-val { font-weight: 600; color: #333; white-space: nowrap; text-align: right; }
+
+  /* Stats Section */
+  .stats-section { background: #fff; border-radius: 12px; padding: 20px 25px; margin-bottom: 25px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .stats-section h3 { margin-bottom: 14px; color: #1a237e; font-size: 1rem; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 15px; }
+  .stats-box { border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px 16px; }
+  .stats-box h4 { font-size: .88rem; color: #1a237e; margin-bottom: 10px; border-bottom: 1px solid #e8eaf6; padding-bottom: 6px; }
+  .stats-row { display: flex; justify-content: space-between; font-size: .82rem; padding: 3px 0; }
+  .stats-row .stats-label { color: #555; }
+  .stats-row .stats-val { font-weight: 600; color: #333; }
+  .stats-row .stats-pct { color: #1a237e; font-weight: 600; margin-left: 6px; }
+  .stats-highlight { background: #e8f5e9; border-radius: 4px; padding: 2px 8px; color: #2e7d32; font-weight: 700; font-size: .82rem; }
+  .rate-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 15px; }
+  .rate-card { background: #f5f5f5; border-radius: 8px; padding: 12px 14px; text-align: center; }
+  .rate-card .rate-label { font-size: .75rem; text-transform: uppercase; color: #888; letter-spacing: .5px; }
+  .rate-card .rate-value { font-size: 1.4rem; font-weight: 700; color: #1a237e; margin-top: 2px; }
+  .rate-card .rate-sub { font-size: .75rem; color: #888; margin-top: 2px; }
+  .rate-card.ptp { background: #e8f5e9; }
+  .rate-card.ptp .rate-value { color: #2e7d32; }
 
   /* Data Table */
   .table-section { background: #fff; border-radius: 12px; padding: 20px 25px; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
@@ -188,6 +213,24 @@
     <div class="summary-card"><div class="label">Total Records</div><div class="value" id="totalRecords">0</div></div>
     <div class="summary-card"><div class="label">Attempts Found</div><div class="value" id="totalAttempts">0</div></div>
     <div class="summary-card total"><div class="label">Grand Total Cost</div><div class="value" id="grandTotal">&#8377; 0.00</div></div>
+  </div>
+
+  <!-- Answer Rate & Disposition Stats -->
+  <div class="stats-section hidden" id="statsSection">
+    <h3>Call Statistics &amp; Disposition Analysis</h3>
+    <!-- Rate Cards -->
+    <div class="rate-cards" id="rateCards"></div>
+    <!-- Status & Disposition Grids -->
+    <div class="stats-grid">
+      <div class="stats-box">
+        <h4>BOT/IVR STATUS Breakdown</h4>
+        <div id="statusBreakdown"></div>
+      </div>
+      <div class="stats-box">
+        <h4>DISPOSITION Breakdown</h4>
+        <div id="dispositionBreakdown"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Attempt Breakdown -->
@@ -534,6 +577,8 @@ async function processData(rows) {
   currentPage = 1;
   renderTable();
 
+  renderStats();
+  document.getElementById('statsSection').classList.remove('hidden');
   document.getElementById('summarySection').classList.remove('hidden');
   document.getElementById('breakdownSection').classList.remove('hidden');
   document.getElementById('tableSection').classList.remove('hidden');
@@ -548,6 +593,102 @@ function renderSummary() {
   document.getElementById('grandTotal').textContent = fmt(grand);
 }
 
+function renderStats() {
+  const total = allRows.length;
+  if (!total) return;
+
+  // --- Overall Answer Rate (non-zero duration in main DURATION col or any attempt) ---
+  const overallAnswered = allRows.filter(r => durationCols.some(dc => (parseFloat(r[dc]) || 0) > 0)).length;
+  const overallAnswerRate = ((overallAnswered / total) * 100).toFixed(1);
+
+  // --- PTP Rate from DISPOSITION column ---
+  const dispCol = headers.find(h => /^DISPOSITION$/i.test(h));
+  let ptpCount = 0, totalWithDisp = 0;
+  if (dispCol) {
+    allRows.forEach(r => {
+      const v = String(r[dispCol] || '').trim().toUpperCase();
+      if (v) totalWithDisp++;
+      if (v === 'PTP') ptpCount++;
+    });
+  }
+  const ptpRate = total ? ((ptpCount / total) * 100).toFixed(1) : '0.0';
+
+  // --- Attempt-wise Answer Rate ---
+  const attemptRates = durationCols.map((dc, i) => {
+    const num = dc.replace(/\D/g, '') || (i + 1);
+    const attempted = allRows.filter(r => r[dc] !== undefined && r[dc] !== '').length;
+    const answered = allRows.filter(r => (parseFloat(r[dc]) || 0) > 0).length;
+    const rate = attempted ? ((answered / attempted) * 100).toFixed(1) : '0.0';
+    return { num, attempted, answered, rate };
+  });
+
+  // --- Rate Cards ---
+  const rateCardsEl = document.getElementById('rateCards');
+  let rateHTML = `
+    <div class="rate-card">
+      <div class="rate-label">Overall Answer Rate</div>
+      <div class="rate-value">${overallAnswerRate}%</div>
+      <div class="rate-sub">${overallAnswered.toLocaleString()} / ${total.toLocaleString()}</div>
+    </div>
+    <div class="rate-card ptp">
+      <div class="rate-label">PTP Rate</div>
+      <div class="rate-value">${ptpRate}%</div>
+      <div class="rate-sub">${ptpCount.toLocaleString()} / ${total.toLocaleString()}</div>
+    </div>
+  `;
+  attemptRates.forEach(a => {
+    rateHTML += `
+      <div class="rate-card">
+        <div class="rate-label">Attempt ${a.num} Answer Rate</div>
+        <div class="rate-value">${a.rate}%</div>
+        <div class="rate-sub">${a.answered.toLocaleString()} / ${a.attempted.toLocaleString()}</div>
+      </div>
+    `;
+  });
+  rateCardsEl.innerHTML = rateHTML;
+
+  // --- BOT/IVR_STATUS Breakdown ---
+  const statusCol = headers.find(h => /^BOT\/IVR_STATUS$/i.test(h) || /^BOT\/IVR.STATUS$/i.test(h));
+  const statusEl = document.getElementById('statusBreakdown');
+  if (statusCol) {
+    const statusCounts = {};
+    allRows.forEach(r => {
+      const v = String(r[statusCol] || '').trim() || '(Blanks)';
+      statusCounts[v] = (statusCounts[v] || 0) + 1;
+    });
+    const sorted = Object.entries(statusCounts).sort((a, b) => b[1] - a[1]);
+    statusEl.innerHTML = sorted.map(([label, count]) => {
+      const pct = ((count / total) * 100).toFixed(1);
+      return `<div class="stats-row">
+        <span class="stats-label">${label}</span>
+        <span><span class="stats-val">${count.toLocaleString()}</span><span class="stats-pct">(${pct}%)</span></span>
+      </div>`;
+    }).join('');
+  } else {
+    statusEl.innerHTML = '<div class="stats-row"><span class="stats-label">No BOT/IVR_STATUS column found</span></div>';
+  }
+
+  // --- DISPOSITION Breakdown ---
+  const dispEl = document.getElementById('dispositionBreakdown');
+  if (dispCol) {
+    const dispCounts = {};
+    allRows.forEach(r => {
+      const v = String(r[dispCol] || '').trim() || '(Blanks)';
+      dispCounts[v] = (dispCounts[v] || 0) + 1;
+    });
+    const sorted = Object.entries(dispCounts).sort((a, b) => b[1] - a[1]);
+    dispEl.innerHTML = sorted.map(([label, count]) => {
+      const pct = ((count / total) * 100).toFixed(1);
+      return `<div class="stats-row">
+        <span class="stats-label">${label}</span>
+        <span><span class="stats-val">${count.toLocaleString()}</span><span class="stats-pct">(${pct}%)</span></span>
+      </div>`;
+    }).join('');
+  } else {
+    dispEl.innerHTML = '<div class="stats-row"><span class="stats-label">No DISPOSITION column found</span></div>';
+  }
+}
+
 function renderBreakdown() {
   const container = document.getElementById('attemptCards');
   container.innerHTML = '';
@@ -560,17 +701,65 @@ function renderBreakdown() {
     const nonZero = durations.filter(d => d > 0);
     const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
     const maxDur = Math.max(...durations);
+    const answerRate = allRows.length ? ((nonZero.length / allRows.length) * 100).toFixed(1) : '0.0';
 
-    const num = dc.replace(/\D/g, '') || (i + 1);
+    // Attempt-wise BOT/IVR_STATUS & DISPOSITION
+    const attemptNum = dc.replace(/\D/g, '') || (i+1);
+    const statusAttemptCol = headers.find(h => h === `BOT/IVR_STATUS_${attemptNum}_ATTEMPT`);
+    const dispAttemptCol = headers.find(h => h === `DISPOSITION_${attemptNum}_ATTEMPT`);
+
+    // Count statuses for this attempt
+    const statusCounts = {};
+    if (statusAttemptCol) {
+      allRows.forEach(r => {
+        const v = String(r[statusAttemptCol] || '').trim() || '(Blanks)';
+        statusCounts[v] = (statusCounts[v] || 0) + 1;
+      });
+    }
+
+    // Count dispositions for this attempt
+    const dispCounts = {};
+    let ptpAttemptCount = 0;
+    if (dispAttemptCol) {
+      allRows.forEach(r => {
+        const v = String(r[dispAttemptCol] || '').trim() || '(Blanks)';
+        dispCounts[v] = (dispCounts[v] || 0) + 1;
+        if (v.toUpperCase() === 'PTP') ptpAttemptCount++;
+      });
+    }
+    const ptpAttemptRate = allRows.length ? ((ptpAttemptCount / allRows.length) * 100).toFixed(1) : '0.0';
+
+    // Build status breakdown HTML
+    const statusHTML = Object.entries(statusCounts).sort((a,b) => b[1]-a[1]).map(([label, count]) => {
+      const pct = ((count / allRows.length) * 100).toFixed(1);
+      return `<div class="sub-stat"><span>${label}</span><span class="sub-val">${count.toLocaleString()} (${pct}%)</span></div>`;
+    }).join('');
+
+    // Build disposition breakdown HTML
+    const dispHTML = Object.entries(dispCounts).sort((a,b) => b[1]-a[1]).map(([label, count]) => {
+      const pct = ((count / allRows.length) * 100).toFixed(1);
+      return `<div class="sub-stat"><span>${label}</span><span class="sub-val">${count.toLocaleString()} (${pct}%)</span></div>`;
+    }).join('');
+
+    const num = attemptNum;
     const card = document.createElement('div');
     card.className = 'attempt-card';
     card.innerHTML = `
       <div class="attempt-name">Attempt ${num}</div>
-      <div class="stat"><span>Column</span><span class="val">${dc}</span></div>
-      <div class="stat"><span>Non-zero entries</span><span class="val">${nonZero.length.toLocaleString()}</span></div>
+      <div class="stat"><span>Non-zero entries</span><span class="val">${nonZero.length.toLocaleString()} / ${allRows.length.toLocaleString()}</span></div>
+      <div class="stat"><span>Answer Rate</span><span class="val" style="color:#1a237e;font-size:.95rem">${answerRate}%</span></div>
+      <div class="stat"><span>PTP Rate</span><span class="val" style="color:#2e7d32;font-size:.95rem">${ptpAttemptRate}% <small style="color:#888;font-weight:400">(${ptpAttemptCount.toLocaleString()})</small></span></div>
       <div class="stat"><span>Avg Duration</span><span class="val">${avgDur.toFixed(1)}s</span></div>
       <div class="stat"><span>Max Duration</span><span class="val">${maxDur}s</span></div>
       <div class="cost-line"><span>Total Cost</span><span>${fmt(totalCost)}</span></div>
+      ${statusAttemptCol ? `<div class="attempt-sub-section">
+        <div class="attempt-sub-title">BOT/IVR STATUS</div>
+        ${statusHTML}
+      </div>` : ''}
+      ${dispAttemptCol ? `<div class="attempt-sub-section">
+        <div class="attempt-sub-title">DISPOSITION</div>
+        ${dispHTML}
+      </div>` : ''}
     `;
     container.appendChild(card);
   });
