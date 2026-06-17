@@ -427,6 +427,7 @@ let costCols = [];
 let currentPage = 1;
 let filteredRows = [];
 let rawRows = []; // original parsed data for re-processing on pricing change
+let preStats = null; // pre-computed stats from single pass
 
 // --- Progress System ---
 const STEPS = [
@@ -506,6 +507,10 @@ function handleFile(file) {
   setStep('read', `File size: ${(file.size / 1024).toFixed(1)} KB`);
 
   const reader = new FileReader();
+  reader.onerror = function() {
+    document.getElementById('progressOverlay').classList.add('hidden');
+    alert('Error reading file. Please try again.');
+  };
   reader.onprogress = function(e) {
     if (e.lengthComputable) {
       const pct = Math.round((e.loaded / e.total) * 20);
@@ -516,190 +521,276 @@ function handleFile(file) {
     }
   };
   reader.onload = async function(e) {
-    setStep('parse', 'Parsing spreadsheet data...');
-    await nextFrame();
+    try {
+      setStep('parse', 'Parsing spreadsheet data...');
+      await nextFrame();
 
-    const data = new Uint8Array(e.target.result);
-    const wb = XLSX.read(data, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
-    if (!json.length) {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      if (!json.length) {
+        document.getElementById('progressOverlay').classList.add('hidden');
+        return alert('No data found in file.');
+      }
+      rawRows = json;
+      await processData(json);
+    } catch (err) {
       document.getElementById('progressOverlay').classList.add('hidden');
-      return alert('No data found in file.');
+      console.error(err);
+      alert('Error parsing file: ' + err.message);
     }
-    rawRows = json;
-    await processData(json);
   };
   reader.readAsArrayBuffer(file);
 }
 
 async function processData(rows) {
-  const isReprocess = document.getElementById('progressOverlay').classList.contains('hidden');
-  if (isReprocess) showProgress('Recalculating billing...');
+  try {
+    const isReprocess = document.getElementById('progressOverlay').classList.contains('hidden');
+    if (isReprocess) showProgress('Recalculating billing...');
 
-  setStep('detect', `${rows.length.toLocaleString()} rows found`);
-  await nextFrame();
+    setStep('detect', `${rows.length.toLocaleString()} rows found`);
+    await nextFrame();
 
-  headers = Object.keys(rows[0]);
+    headers = Object.keys(rows[0]);
 
-  // Find duration columns
-  durationCols = headers.filter(h => /duration.*attempt/i.test(h)).sort((a, b) => {
-    const na = parseInt(a.replace(/\D/g, '')) || 0;
-    const nb = parseInt(b.replace(/\D/g, '')) || 0;
-    return na - nb;
-  });
+    // Find duration columns
+    durationCols = headers.filter(h => /duration.*attempt/i.test(h)).sort((a, b) => {
+      const na = parseInt(a.replace(/\D/g, '')) || 0;
+      const nb = parseInt(b.replace(/\D/g, '')) || 0;
+      return na - nb;
+    });
 
-  if (!durationCols.length) {
-    durationCols = headers.filter(h => /duration/i.test(h));
-  }
-
-  if (!durationCols.length) {
-    document.getElementById('progressOverlay').classList.add('hidden');
-    return alert('No DURATION columns found. Ensure columns are named like DURATION_1_ATTEMPT, DURATION_2_ATTEMPT, etc.');
-  }
-
-  costCols = durationCols.map(c => 'COST_' + c);
-
-  setStep('calc', `0 of ${rows.length.toLocaleString()} rows`);
-  await nextFrame();
-
-  // Calculate costs in batches to show progress
-  const BATCH = 500;
-  allRows = [];
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const end = Math.min(i + BATCH, rows.length);
-    for (let j = i; j < end; j++) {
-      const row = rows[j];
-      const newRow = { ...row };
-      let rowTotal = 0;
-      durationCols.forEach((dc, k) => {
-        const dur = parseFloat(row[dc]) || 0;
-        const cost = getCost(dur);
-        newRow[costCols[k]] = cost;
-        rowTotal += cost;
-      });
-      newRow['TOTAL_COST'] = rowTotal;
-      allRows.push(newRow);
+    if (!durationCols.length) {
+      durationCols = headers.filter(h => /duration/i.test(h));
     }
-    setCalcProgress(end, rows.length);
-    if (end < rows.length) await nextFrame();
+
+    if (!durationCols.length) {
+      document.getElementById('progressOverlay').classList.add('hidden');
+      return alert('No DURATION columns found. Ensure columns are named like DURATION_1_ATTEMPT, DURATION_2_ATTEMPT, etc.');
+    }
+
+    costCols = durationCols.map(c => 'COST_' + c);
+
+    // Detect related columns per attempt
+    const attemptMeta = durationCols.map((dc, i) => {
+      const num = dc.replace(/\D/g, '') || (i + 1);
+      return {
+        num,
+        durCol: dc,
+        costCol: costCols[i],
+        statusCol: headers.find(h => h === `BOT/IVR_STATUS_${num}_ATTEMPT`) || null,
+        dialedCol: headers.find(h => h === `DIALED_DATETIME_${num}_ATTEMPT`) || null,
+        dispCol: headers.find(h => h === `DISPOSITION_${num}_ATTEMPT`) || null,
+      };
+    });
+    const overallDispCol = headers.find(h => /^DISPOSITION$/i.test(h)) || null;
+    const overallStatusCol = headers.find(h => /^BOT\/IVR_STATUS$/i.test(h) || /^BOT\/IVR.STATUS$/i.test(h)) || null;
+
+    setStep('calc', `0 of ${rows.length.toLocaleString()} rows`);
+    await nextFrame();
+
+    // ===== SINGLE-PASS: compute costs + all stats at once =====
+    const BATCH = 2000;
+    allRows = [];
+    let grandTotal = 0;
+    let overallAnswered = 0;
+    let overallPtp = 0;
+    const overallStatusCounts = {};
+    const overallDispCounts = {};
+
+    // Per-attempt accumulators
+    const attStats = attemptMeta.map(() => ({
+      answered: 0, triggered: 0, totalDur: 0, maxDur: 0, totalCost: 0,
+      ptpCount: 0,
+      statusCounts: {},
+      dispCounts: {},
+    }));
+
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const end = Math.min(i + BATCH, rows.length);
+      for (let j = i; j < end; j++) {
+        const row = rows[j];
+        const newRow = { ...row };
+        let rowTotal = 0;
+        let rowAnswered = false;
+
+        for (let k = 0; k < durationCols.length; k++) {
+          const dc = durationCols[k];
+          const dur = parseFloat(row[dc]) || 0;
+          const cost = getCost(dur);
+          newRow[costCols[k]] = cost;
+          rowTotal += cost;
+
+          const as = attStats[k];
+          const meta = attemptMeta[k];
+          as.totalCost += cost;
+
+          if (dur > 0) {
+            as.answered++;
+            as.totalDur += dur;
+            if (dur > as.maxDur) as.maxDur = dur;
+            rowAnswered = true;
+          }
+
+          // Triggered
+          const trigCol = meta.statusCol || meta.dialedCol;
+          if (trigCol) {
+            const tv = String(row[trigCol] || '').trim();
+            if (tv) as.triggered++;
+          }
+
+          // Status counts for this attempt
+          if (meta.statusCol) {
+            const sv = String(row[meta.statusCol] || '').trim() || '(Blanks)';
+            as.statusCounts[sv] = (as.statusCounts[sv] || 0) + 1;
+          }
+
+          // Disposition counts for this attempt
+          if (meta.dispCol) {
+            const dv = String(row[meta.dispCol] || '').trim() || '(Blanks)';
+            as.dispCounts[dv] = (as.dispCounts[dv] || 0) + 1;
+            if (dv.toUpperCase() === 'PTP') as.ptpCount++;
+          }
+        }
+
+        newRow['TOTAL_COST'] = rowTotal;
+        grandTotal += rowTotal;
+        if (rowAnswered) overallAnswered++;
+
+        // Overall disposition
+        if (overallDispCol) {
+          const dv = String(row[overallDispCol] || '').trim() || '(Blanks)';
+          overallDispCounts[dv] = (overallDispCounts[dv] || 0) + 1;
+          if (dv.toUpperCase() === 'PTP') overallPtp++;
+        }
+        // Overall status
+        if (overallStatusCol) {
+          const sv = String(row[overallStatusCol] || '').trim() || '(Blanks)';
+          overallStatusCounts[sv] = (overallStatusCounts[sv] || 0) + 1;
+        }
+
+        allRows.push(newRow);
+      }
+      setCalcProgress(end, rows.length);
+      if (end < rows.length) await nextFrame();
+    }
+
+    // Build preStats object (used by render + export — no more re-iteration)
+    const total = allRows.length;
+    preStats = {
+      total,
+      grandTotal,
+      overallAnswered,
+      overallPtp,
+      overallStatusCounts,
+      overallDispCounts,
+      overallStatusCol,
+      overallDispCol,
+      attempts: attemptMeta.map((meta, k) => {
+        const as = attStats[k];
+        const triggered = (meta.statusCol || meta.dialedCol) ? as.triggered : as.answered;
+        return {
+          num: meta.num,
+          durCol: meta.durCol,
+          statusCol: meta.statusCol,
+          dispCol: meta.dispCol,
+          triggered,
+          answered: as.answered,
+          answerRate: triggered ? ((as.answered / triggered) * 100).toFixed(1) : '0.0',
+          avgDur: as.answered ? (as.totalDur / as.answered).toFixed(1) : '0.0',
+          maxDur: as.maxDur,
+          totalCost: as.totalCost,
+          ptpCount: as.ptpCount,
+          ptpRate: total ? ((as.ptpCount / total) * 100).toFixed(1) : '0.0',
+          statusCounts: Object.entries(as.statusCounts).sort((a, b) => b[1] - a[1]),
+          dispCounts: Object.entries(as.dispCounts).sort((a, b) => b[1] - a[1]),
+        };
+      }),
+    };
+
+    setStep('render', 'Building tables and charts...');
+    await nextFrame();
+
+    renderSummary();
+    renderStats();
+    renderBreakdown();
+    filteredRows = allRows; // reference, not copy — saves memory
+    currentPage = 1;
+    renderTable();
+
+    document.getElementById('statsSection').classList.remove('hidden');
+    document.getElementById('summarySection').classList.remove('hidden');
+    document.getElementById('breakdownSection').classList.remove('hidden');
+    document.getElementById('tableSection').classList.remove('hidden');
+
+    completeProgress();
+  } catch (err) {
+    document.getElementById('progressOverlay').classList.add('hidden');
+    console.error(err);
+    alert('Error processing data: ' + err.message);
   }
-
-  setStep('render', 'Building tables and charts...');
-  await nextFrame();
-
-  renderSummary();
-  renderBreakdown();
-  filteredRows = [...allRows];
-  currentPage = 1;
-  renderTable();
-
-  renderStats();
-  document.getElementById('statsSection').classList.remove('hidden');
-  document.getElementById('summarySection').classList.remove('hidden');
-  document.getElementById('breakdownSection').classList.remove('hidden');
-  document.getElementById('tableSection').classList.remove('hidden');
-
-  completeProgress();
 }
 
 function renderSummary() {
-  document.getElementById('totalRecords').textContent = allRows.length.toLocaleString();
-  document.getElementById('totalAttempts').textContent = durationCols.length;
-  const grand = allRows.reduce((s, r) => s + r.TOTAL_COST, 0);
-  document.getElementById('grandTotal').textContent = fmt(grand);
+  const s = preStats;
+  document.getElementById('totalRecords').textContent = s.total.toLocaleString();
+  document.getElementById('totalAttempts').textContent = s.attempts.length;
+  document.getElementById('grandTotal').textContent = fmt(s.grandTotal);
 }
 
 function renderStats() {
-  const total = allRows.length;
-  if (!total) return;
+  const s = preStats;
+  if (!s || !s.total) return;
+  const total = s.total;
 
-  // --- Overall Answer Rate (non-zero duration in main DURATION col or any attempt) ---
-  const overallAnswered = allRows.filter(r => durationCols.some(dc => (parseFloat(r[dc]) || 0) > 0)).length;
-  const overallAnswerRate = ((overallAnswered / total) * 100).toFixed(1);
+  const overallAnswerRate = ((s.overallAnswered / total) * 100).toFixed(1);
+  const ptpRate = ((s.overallPtp / total) * 100).toFixed(1);
 
-  // --- PTP Rate from DISPOSITION column ---
-  const dispCol = headers.find(h => /^DISPOSITION$/i.test(h));
-  let ptpCount = 0, totalWithDisp = 0;
-  if (dispCol) {
-    allRows.forEach(r => {
-      const v = String(r[dispCol] || '').trim().toUpperCase();
-      if (v) totalWithDisp++;
-      if (v === 'PTP') ptpCount++;
-    });
-  }
-  const ptpRate = total ? ((ptpCount / total) * 100).toFixed(1) : '0.0';
-
-  // --- Attempt-wise Answer Rate ---
-  const attemptRates = durationCols.map((dc, i) => {
-    const num = dc.replace(/\D/g, '') || (i + 1);
-    const attempted = allRows.filter(r => r[dc] !== undefined && r[dc] !== '').length;
-    const answered = allRows.filter(r => (parseFloat(r[dc]) || 0) > 0).length;
-    const rate = attempted ? ((answered / attempted) * 100).toFixed(1) : '0.0';
-    return { num, attempted, answered, rate };
-  });
-
-  // --- Rate Cards ---
+  // Rate Cards
   const rateCardsEl = document.getElementById('rateCards');
   let rateHTML = `
     <div class="rate-card">
       <div class="rate-label">Overall Answer Rate</div>
       <div class="rate-value">${overallAnswerRate}%</div>
-      <div class="rate-sub">${overallAnswered.toLocaleString()} / ${total.toLocaleString()}</div>
+      <div class="rate-sub">${s.overallAnswered.toLocaleString()} / ${total.toLocaleString()}</div>
     </div>
     <div class="rate-card ptp">
       <div class="rate-label">PTP Rate</div>
       <div class="rate-value">${ptpRate}%</div>
-      <div class="rate-sub">${ptpCount.toLocaleString()} / ${total.toLocaleString()}</div>
+      <div class="rate-sub">${s.overallPtp.toLocaleString()} / ${total.toLocaleString()}</div>
     </div>
   `;
-  attemptRates.forEach(a => {
+  s.attempts.forEach(a => {
     rateHTML += `
       <div class="rate-card">
         <div class="rate-label">Attempt ${a.num} Answer Rate</div>
-        <div class="rate-value">${a.rate}%</div>
-        <div class="rate-sub">${a.answered.toLocaleString()} / ${a.attempted.toLocaleString()}</div>
+        <div class="rate-value">${a.answerRate}%</div>
+        <div class="rate-sub">${a.answered.toLocaleString()} / ${a.triggered.toLocaleString()}</div>
       </div>
     `;
   });
   rateCardsEl.innerHTML = rateHTML;
 
-  // --- BOT/IVR_STATUS Breakdown ---
-  const statusCol = headers.find(h => /^BOT\/IVR_STATUS$/i.test(h) || /^BOT\/IVR.STATUS$/i.test(h));
+  // BOT/IVR_STATUS Breakdown
   const statusEl = document.getElementById('statusBreakdown');
-  if (statusCol) {
-    const statusCounts = {};
-    allRows.forEach(r => {
-      const v = String(r[statusCol] || '').trim() || '(Blanks)';
-      statusCounts[v] = (statusCounts[v] || 0) + 1;
-    });
-    const sorted = Object.entries(statusCounts).sort((a, b) => b[1] - a[1]);
+  if (s.overallStatusCol) {
+    const sorted = Object.entries(s.overallStatusCounts).sort((a, b) => b[1] - a[1]);
     statusEl.innerHTML = sorted.map(([label, count]) => {
       const pct = ((count / total) * 100).toFixed(1);
-      return `<div class="stats-row">
-        <span class="stats-label">${label}</span>
-        <span><span class="stats-val">${count.toLocaleString()}</span><span class="stats-pct">(${pct}%)</span></span>
-      </div>`;
+      return `<div class="stats-row"><span class="stats-label">${label}</span><span><span class="stats-val">${count.toLocaleString()}</span><span class="stats-pct">(${pct}%)</span></span></div>`;
     }).join('');
   } else {
     statusEl.innerHTML = '<div class="stats-row"><span class="stats-label">No BOT/IVR_STATUS column found</span></div>';
   }
 
-  // --- DISPOSITION Breakdown ---
+  // DISPOSITION Breakdown
   const dispEl = document.getElementById('dispositionBreakdown');
-  if (dispCol) {
-    const dispCounts = {};
-    allRows.forEach(r => {
-      const v = String(r[dispCol] || '').trim() || '(Blanks)';
-      dispCounts[v] = (dispCounts[v] || 0) + 1;
-    });
-    const sorted = Object.entries(dispCounts).sort((a, b) => b[1] - a[1]);
+  if (s.overallDispCol) {
+    const sorted = Object.entries(s.overallDispCounts).sort((a, b) => b[1] - a[1]);
     dispEl.innerHTML = sorted.map(([label, count]) => {
       const pct = ((count / total) * 100).toFixed(1);
-      return `<div class="stats-row">
-        <span class="stats-label">${label}</span>
-        <span><span class="stats-val">${count.toLocaleString()}</span><span class="stats-pct">(${pct}%)</span></span>
-      </div>`;
+      return `<div class="stats-row"><span class="stats-label">${label}</span><span><span class="stats-val">${count.toLocaleString()}</span><span class="stats-pct">(${pct}%)</span></span></div>`;
     }).join('');
   } else {
     dispEl.innerHTML = '<div class="stats-row"><span class="stats-label">No DISPOSITION column found</span></div>';
@@ -709,74 +800,36 @@ function renderStats() {
 function renderBreakdown() {
   const container = document.getElementById('attemptCards');
   container.innerHTML = '';
+  const s = preStats;
+  if (!s) return;
 
-  durationCols.forEach((dc, i) => {
-    const durations = allRows.map(r => parseFloat(r[dc]) || 0);
-    const costs = allRows.map(r => r[costCols[i]]);
-    const totalCost = costs.reduce((a, b) => a + b, 0);
-    const totalDur = durations.reduce((a, b) => a + b, 0);
-    const nonZero = durations.filter(d => d > 0);
-    const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
-    const maxDur = Math.max(...durations);
-    // Calls triggered = rows where this attempt's status/dialed column is non-blank
-    const attemptNum = dc.replace(/\D/g, '') || (i+1);
-    const dialedAttemptCol = headers.find(h => h === `DIALED_DATETIME_${attemptNum}_ATTEMPT`);
-    const statusAttemptCol = headers.find(h => h === `BOT/IVR_STATUS_${attemptNum}_ATTEMPT`);
-    const triggerCol = statusAttemptCol || dialedAttemptCol;
-    const triggered = triggerCol ? allRows.filter(r => String(r[triggerCol] || '').trim() !== '').length : nonZero.length;
-    const answerRate = triggered ? ((nonZero.length / triggered) * 100).toFixed(1) : '0.0';
-    const dispAttemptCol = headers.find(h => h === `DISPOSITION_${attemptNum}_ATTEMPT`);
-
-    // Count statuses for this attempt
-    const statusCounts = {};
-    if (statusAttemptCol) {
-      allRows.forEach(r => {
-        const v = String(r[statusAttemptCol] || '').trim() || '(Blanks)';
-        statusCounts[v] = (statusCounts[v] || 0) + 1;
-      });
-    }
-
-    // Count dispositions for this attempt
-    const dispCounts = {};
-    let ptpAttemptCount = 0;
-    if (dispAttemptCol) {
-      allRows.forEach(r => {
-        const v = String(r[dispAttemptCol] || '').trim() || '(Blanks)';
-        dispCounts[v] = (dispCounts[v] || 0) + 1;
-        if (v.toUpperCase() === 'PTP') ptpAttemptCount++;
-      });
-    }
-    const ptpAttemptRate = allRows.length ? ((ptpAttemptCount / allRows.length) * 100).toFixed(1) : '0.0';
-
-    // Build status breakdown HTML
-    const statusHTML = Object.entries(statusCounts).sort((a,b) => b[1]-a[1]).map(([label, count]) => {
-      const pct = ((count / allRows.length) * 100).toFixed(1);
+  s.attempts.forEach(a => {
+    const statusHTML = a.statusCounts.map(([label, count]) => {
+      const pct = ((count / s.total) * 100).toFixed(1);
       return `<div class="sub-stat"><span>${label}</span><span class="sub-val">${count.toLocaleString()} (${pct}%)</span></div>`;
     }).join('');
 
-    // Build disposition breakdown HTML
-    const dispHTML = Object.entries(dispCounts).sort((a,b) => b[1]-a[1]).map(([label, count]) => {
-      const pct = ((count / allRows.length) * 100).toFixed(1);
+    const dispHTML = a.dispCounts.map(([label, count]) => {
+      const pct = ((count / s.total) * 100).toFixed(1);
       return `<div class="sub-stat"><span>${label}</span><span class="sub-val">${count.toLocaleString()} (${pct}%)</span></div>`;
     }).join('');
 
-    const num = attemptNum;
     const card = document.createElement('div');
     card.className = 'attempt-card';
     card.innerHTML = `
-      <div class="attempt-name">Attempt ${num}</div>
-      <div class="stat"><span>Calls Triggered</span><span class="val">${triggered.toLocaleString()} / ${allRows.length.toLocaleString()}</span></div>
-      <div class="stat"><span>Answered Entries</span><span class="val">${nonZero.length.toLocaleString()}</span></div>
-      <div class="stat"><span>Answer Rate</span><span class="val" style="color:#1a237e;font-size:.95rem">${answerRate}%</span></div>
-      <div class="stat"><span>PTP Rate</span><span class="val" style="color:#2e7d32;font-size:.95rem">${ptpAttemptRate}% <small style="color:#888;font-weight:400">(${ptpAttemptCount.toLocaleString()})</small></span></div>
-      <div class="stat"><span>Avg Duration</span><span class="val">${avgDur.toFixed(1)}s</span></div>
-      <div class="stat"><span>Max Duration</span><span class="val">${maxDur}s</span></div>
-      <div class="cost-line"><span>Total Cost</span><span>${fmt(totalCost)}</span></div>
-      ${statusAttemptCol ? `<div class="attempt-sub-section">
+      <div class="attempt-name">Attempt ${a.num}</div>
+      <div class="stat"><span>Calls Triggered</span><span class="val">${a.triggered.toLocaleString()} / ${s.total.toLocaleString()}</span></div>
+      <div class="stat"><span>Answered Entries</span><span class="val">${a.answered.toLocaleString()}</span></div>
+      <div class="stat"><span>Answer Rate</span><span class="val" style="color:#1a237e;font-size:.95rem">${a.answerRate}%</span></div>
+      <div class="stat"><span>PTP Rate</span><span class="val" style="color:#2e7d32;font-size:.95rem">${a.ptpRate}% <small style="color:#888;font-weight:400">(${a.ptpCount.toLocaleString()})</small></span></div>
+      <div class="stat"><span>Avg Duration</span><span class="val">${a.avgDur}s</span></div>
+      <div class="stat"><span>Max Duration</span><span class="val">${a.maxDur}s</span></div>
+      <div class="cost-line"><span>Total Cost</span><span>${fmt(a.totalCost)}</span></div>
+      ${a.statusCol ? `<div class="attempt-sub-section">
         <div class="attempt-sub-title">BOT/IVR STATUS</div>
         ${statusHTML}
       </div>` : ''}
-      ${dispAttemptCol ? `<div class="attempt-sub-section">
+      ${a.dispCol ? `<div class="attempt-sub-section">
         <div class="attempt-sub-title">DISPOSITION</div>
         ${dispHTML}
       </div>` : ''}
@@ -837,7 +890,7 @@ function goPage(p) { currentPage = p; renderTable(); }
 // Search
 document.getElementById('searchInput').addEventListener('input', function() {
   const q = this.value.toLowerCase();
-  filteredRows = q ? allRows.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q))) : [...allRows];
+  filteredRows = q ? allRows.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q))) : allRows;
   currentPage = 1;
   renderTable();
 });
@@ -868,257 +921,238 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-// Export Stats XLSX — single sheet
+// Export Stats XLSX — single sheet, uses preStats (zero re-iteration)
 async function exportStats() {
-  if (!allRows.length) return;
-  const total = allRows.length;
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Billing App';
+  if (!preStats || !preStats.total) return;
+  const s = preStats;
+  const total = s.total;
 
-  function countMap(col) {
-    const m = {};
-    allRows.forEach(r => { const v = String(r[col]||'').trim()||'(Blanks)'; m[v]=(m[v]||0)+1; });
-    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
-  }
+  // Show progress overlay for export
+  showProgress('Exporting Stats Report...');
+  setStep('calc', 'Building Excel report...');
+  await nextFrame();
 
-  const C = {
-    navy:'FF1A237E', navyLight:'FFE8EAF6',
-    green:'FF2E7D32', greenLight:'FFE8F5E9',
-    orange:'FFE65100', orangeLight:'FFFFF3E0',
-    white:'FFFFFFFF', black:'FF333333',
-    gray:'FFF5F5F5', grayBorder:'FFE0E0E0',
-    blue:'FF1565C0', blueLight:'FFE3F2FD',
-    purple:'FF6A1B9A', purpleLight:'FFF3E5F5',
-    teal:'FF00695C', tealLight:'FFE0F2F1',
-  };
-  const attemptAccents = [C.navy, C.blue, C.purple, C.teal, C.orange, 'FF4E342E'];
-  const attemptLights = [C.navyLight, C.blueLight, C.purpleLight, C.tealLight, C.orangeLight, 'FFEFEBE9'];
+  try {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Billing App';
 
-  const COLS = 6;
-  const thin = { style:'thin', color:{argb:C.grayBorder} };
-  const border = { top:thin, bottom:thin, left:thin, right:thin };
+    const C = {
+      navy:'FF1A237E', navyLight:'FFE8EAF6',
+      green:'FF2E7D32', greenLight:'FFE8F5E9',
+      orange:'FFE65100', orangeLight:'FFFFF3E0',
+      white:'FFFFFFFF', black:'FF333333',
+      gray:'FFF5F5F5', grayBorder:'FFE0E0E0',
+      blue:'FF1565C0', blueLight:'FFE3F2FD',
+      purple:'FF6A1B9A', purpleLight:'FFF3E5F5',
+      teal:'FF00695C', tealLight:'FFE0F2F1',
+    };
+    const attemptAccents = [C.navy, C.blue, C.purple, C.teal, C.orange, 'FF4E342E'];
+    const attemptLights = [C.navyLight, C.blueLight, C.purpleLight, C.tealLight, C.orangeLight, 'FFEFEBE9'];
 
-  const ws = wb.addWorksheet('Stats Report', { properties: { tabColor: { argb: C.navy } } });
-  ws.columns = [{width:32},{width:16},{width:13},{width:30},{width:16},{width:13}];
+    const COLS = 6;
+    const thin = { style:'thin', color:{argb:C.grayBorder} };
+    const border = { top:thin, bottom:thin, left:thin, right:thin };
 
-  // --- Style helpers ---
-  function addTitle(text, color) {
-    const rn = ws.rowCount + 1;
-    const row = ws.addRow([text]); ws.mergeCells(rn,1,rn,COLS);
-    row.height = 34;
-    for (let c = 1; c <= COLS; c++) {
-      const cell = row.getCell(c);
-      cell.font = { bold:true, size:14, color:{argb:C.white} };
-      cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:color||C.navy} };
-      cell.alignment = { vertical:'middle', horizontal:'center' };
-    }
-  }
-  function addSection(text, color) {
-    const rn = ws.rowCount + 1;
-    const row = ws.addRow([text]); ws.mergeCells(rn,1,rn,COLS);
-    row.height = 24;
-    for (let c = 1; c <= COLS; c++) {
-      const cell = row.getCell(c);
-      cell.font = { bold:true, size:11, color:{argb:C.white} };
-      cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:color||C.navy} };
-      cell.alignment = { vertical:'middle' };
-      cell.border = border;
-    }
-  }
-  function addTableHeader(vals, leftColor, rightColor) {
-    const row = ws.addRow(vals);
-    row.height = 22;
-    vals.forEach((_, ci) => {
-      const cell = row.getCell(ci+1);
-      const color = (rightColor && ci >= 3) ? rightColor : (leftColor || C.navy);
-      cell.font = { bold:true, size:10, color:{argb:C.white} };
-      cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:color} };
-      cell.alignment = { vertical:'middle' };
-      cell.border = border;
-    });
-  }
-  function addDataRow(vals, alt, leftTint, rightTint) {
-    const row = ws.addRow(vals);
-    vals.forEach((_, ci) => {
-      const cell = row.getCell(ci+1);
-      cell.font = { size:10, color:{argb:C.black} };
-      cell.border = border;
-      cell.alignment = { vertical:'middle' };
-      if (alt) {
-        const tint = (rightTint && ci >= 3) ? rightTint : (leftTint || C.gray);
-        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:tint} };
+    const ws = wb.addWorksheet('Stats Report', { properties: { tabColor: { argb: C.navy } } });
+    ws.columns = [{width:32},{width:16},{width:13},{width:30},{width:16},{width:13}];
+
+    // --- Style helpers ---
+    function addTitle(text, color) {
+      const rn = ws.rowCount + 1;
+      const row = ws.addRow([text]); ws.mergeCells(rn,1,rn,COLS);
+      row.height = 34;
+      for (let c = 1; c <= COLS; c++) {
+        const cell = row.getCell(c);
+        cell.font = { bold:true, size:14, color:{argb:C.white} };
+        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:color||C.navy} };
+        cell.alignment = { vertical:'middle', horizontal:'center' };
       }
-    });
-    return row;
-  }
-  function boldLabel(cell) { cell.font = { bold:true, size:10, color:{argb:C.navy} }; }
-  function boldValue(cell, color) {
-    cell.font = { bold:true, size:11, color:{argb:color||C.black} };
-    cell.alignment = { horizontal:'right', vertical:'middle' };
-  }
-  function addSpacer() { ws.addRow([]); }
-
-  // ======================== DATA PREP ========================
-  const fileName = document.getElementById('fileName').textContent || 'N/A';
-  const grand = allRows.reduce((s, r) => s + r.TOTAL_COST, 0);
-  const overallAnswered = allRows.filter(r => durationCols.some(dc => (parseFloat(r[dc]) || 0) > 0)).length;
-  const dispCol = headers.find(h => /^DISPOSITION$/i.test(h));
-  const statusCol = headers.find(h => /^BOT\/IVR_STATUS$/i.test(h) || /^BOT\/IVR.STATUS$/i.test(h));
-  let ptpCount = 0;
-  if (dispCol) allRows.forEach(r => { if (String(r[dispCol]||'').trim().toUpperCase() === 'PTP') ptpCount++; });
-
-  // ======================== TITLE ========================
-  addTitle('STATS REPORT');
-  addSpacer();
-
-  // ======================== FILE INFO ========================
-  addSection('FILE INFORMATION', C.navy);
-  let row = addDataRow(['File Name', fileName, '', 'Generated On', new Date().toLocaleString(), '']);
-  boldLabel(row.getCell(1)); boldLabel(row.getCell(4));
-  row = addDataRow(['Total Records', total, '', 'Attempts Found', durationCols.length, ''], true);
-  boldLabel(row.getCell(1)); boldValue(row.getCell(2), C.navy);
-  boldLabel(row.getCell(4)); boldValue(row.getCell(5), C.navy);
-  row = addDataRow(['Grand Total Cost', '\u20B9 ' + grand.toFixed(2), '', '', '', '']);
-  boldLabel(row.getCell(1)); row.getCell(2).font = { bold:true, size:13, color:{argb:C.green} };
-  addSpacer();
-
-  // ======================== OVERALL RATES ========================
-  addSection('OVERALL RATES', C.blue);
-  addTableHeader(['Metric', 'Count', 'Total', 'Rate', '', ''], C.blue);
-  row = addDataRow(['Overall Answer Rate', overallAnswered, total, ((overallAnswered/total)*100).toFixed(1) + '%', '', '']);
-  boldValue(row.getCell(4), C.navy);
-  row = addDataRow(['PTP Rate', ptpCount, total, ((ptpCount/total)*100).toFixed(1) + '%', '', ''], true);
-  boldValue(row.getCell(4), C.green);
-  addSpacer();
-
-  // ======================== BOT/IVR STATUS + DISPOSITION SIDE BY SIDE ========================
-  if (statusCol || dispCol) {
-    const sCounts = statusCol ? countMap(statusCol) : [];
-    const dCounts = dispCol ? countMap(dispCol) : [];
-    const maxR = Math.max(sCounts.length, dCounts.length);
-    addTableHeader(['BOT/IVR STATUS', 'Count', '%', 'DISPOSITION', 'Count', '%'], C.orange, C.green);
-    for (let i = 0; i < maxR; i++) {
-      const sE = sCounts[i], dE = dCounts[i];
-      row = addDataRow([
-        sE?sE[0]:'', sE?sE[1]:'', sE?((sE[1]/total)*100).toFixed(1)+'%':'',
-        dE?dE[0]:'', dE?dE[1]:'', dE?((dE[1]/total)*100).toFixed(1)+'%':''
-      ], i%2===1, C.orangeLight, C.greenLight);
-      if (sE) boldValue(row.getCell(3), C.orange);
-      if (dE) boldValue(row.getCell(6), C.green);
     }
+    function addSection(text, color) {
+      const rn = ws.rowCount + 1;
+      const row = ws.addRow([text]); ws.mergeCells(rn,1,rn,COLS);
+      row.height = 24;
+      for (let c = 1; c <= COLS; c++) {
+        const cell = row.getCell(c);
+        cell.font = { bold:true, size:11, color:{argb:C.white} };
+        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:color||C.navy} };
+        cell.alignment = { vertical:'middle' };
+        cell.border = border;
+      }
+    }
+    function addTableHeader(vals, leftColor, rightColor) {
+      const row = ws.addRow(vals);
+      row.height = 22;
+      vals.forEach((_, ci) => {
+        const cell = row.getCell(ci+1);
+        const color = (rightColor && ci >= 3) ? rightColor : (leftColor || C.navy);
+        cell.font = { bold:true, size:10, color:{argb:C.white} };
+        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:color} };
+        cell.alignment = { vertical:'middle' };
+        cell.border = border;
+      });
+    }
+    function addDataRow(vals, alt, leftTint, rightTint) {
+      const row = ws.addRow(vals);
+      vals.forEach((_, ci) => {
+        const cell = row.getCell(ci+1);
+        cell.font = { size:10, color:{argb:C.black} };
+        cell.border = border;
+        cell.alignment = { vertical:'middle' };
+        if (alt) {
+          const tint = (rightTint && ci >= 3) ? rightTint : (leftTint || C.gray);
+          cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:tint} };
+        }
+      });
+      return row;
+    }
+    function boldLabel(cell) { cell.font = { bold:true, size:10, color:{argb:C.navy} }; }
+    function boldValue(cell, color) {
+      cell.font = { bold:true, size:11, color:{argb:color||C.black} };
+      cell.alignment = { horizontal:'right', vertical:'middle' };
+    }
+    function addSpacer() { ws.addRow([]); }
+
+    // ======================== TITLE ========================
+    const fileName = document.getElementById('fileName').textContent || 'N/A';
+    addTitle('STATS REPORT');
     addSpacer();
-  }
 
-  // ======================== ATTEMPT COMPARISON TABLE ========================
-  addSection('ATTEMPT COMPARISON', C.navy);
-  // Build comparison data
-  const attData = durationCols.map((dc, i) => {
-    const attemptNum = dc.replace(/\D/g,'') || (i+1);
-    const durations = allRows.map(r => parseFloat(r[dc]) || 0);
-    const nonZero = durations.filter(d => d > 0);
-    const totalDur = durations.reduce((a,b) => a+b, 0);
-    const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
-    const maxDur = Math.max(...durations);
-    const costs = allRows.map(r => r[costCols[i]]);
-    const totalCost = costs.reduce((a,b) => a+b, 0);
-    const sCol = headers.find(h => h === `BOT/IVR_STATUS_${attemptNum}_ATTEMPT`);
-    const dCol = headers.find(h => h === `DIALED_DATETIME_${attemptNum}_ATTEMPT`);
-    const tCol = sCol || dCol;
-    const triggered = tCol ? allRows.filter(r => String(r[tCol]||'').trim() !== '').length : nonZero.length;
-    const ansRate = triggered ? ((nonZero.length/triggered)*100).toFixed(1) : '0.0';
-    const dpCol = headers.find(h => h === `DISPOSITION_${attemptNum}_ATTEMPT`);
-    let ptp = 0;
-    if (dpCol) allRows.forEach(r => { if (String(r[dpCol]||'').trim().toUpperCase()==='PTP') ptp++; });
-    return { num:attemptNum, triggered, answered:nonZero.length, ansRate, ptp, ptpRate:((ptp/total)*100).toFixed(1), avgDur:avgDur.toFixed(1), maxDur, totalCost:totalCost.toFixed(2), sCol, dpCol };
-  });
+    // ======================== FILE INFO ========================
+    addSection('FILE INFORMATION', C.navy);
+    let row = addDataRow(['File Name', fileName, '', 'Generated On', new Date().toLocaleString(), '']);
+    boldLabel(row.getCell(1)); boldLabel(row.getCell(4));
+    row = addDataRow(['Total Records', total, '', 'Attempts Found', s.attempts.length, ''], true);
+    boldLabel(row.getCell(1)); boldValue(row.getCell(2), C.navy);
+    boldLabel(row.getCell(4)); boldValue(row.getCell(5), C.navy);
+    row = addDataRow(['Grand Total Cost', '\u20B9 ' + s.grandTotal.toFixed(2), '', '', '', '']);
+    boldLabel(row.getCell(1)); row.getCell(2).font = { bold:true, size:13, color:{argb:C.green} };
+    addSpacer();
 
-  // Render as a horizontal table: metrics as rows, attempts as columns
-  const maxAttCols = Math.min(attData.length, 5); // max 5 attempts side by side per block
-  for (let block = 0; block < attData.length; block += maxAttCols) {
-    const chunk = attData.slice(block, block + maxAttCols);
-    if (block > 0) addSpacer();
-    // Header row
-    const hdrVals = ['Metric', ...chunk.map(a => 'Attempt '+a.num)];
-    while (hdrVals.length < COLS+1) hdrVals.push('');
-    const hdrRow = ws.addRow(hdrVals.slice(0, COLS));
-    hdrRow.height = 22;
-    hdrRow.eachCell((c, ci) => {
-      c.font = { bold:true, size:10, color:{argb:C.white} };
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb: ci===1 ? C.navy : (attemptAccents[(block+ci-2)%attemptAccents.length])} };
-      c.alignment = { vertical:'middle', horizontal: ci===1?'left':'center' };
-      c.border = border;
-    });
-    // Metric rows
-    const metrics = [
-      { label:'Calls Triggered', key:'triggered', color:C.navy },
-      { label:'Answered', key:'answered', color:C.navy },
-      { label:'Answer Rate', key:'ansRate', color:C.blue, suffix:'%' },
-      { label:'PTP Count', key:'ptp', color:C.green },
-      { label:'PTP Rate', key:'ptpRate', color:C.green, suffix:'%' },
-      { label:'Avg Duration (s)', key:'avgDur', color:C.navy },
-      { label:'Max Duration (s)', key:'maxDur', color:C.navy },
-      { label:'Total Cost (\u20B9)', key:'totalCost', color:C.green },
-    ];
-    metrics.forEach((m, mi) => {
-      const vals = [m.label, ...chunk.map(a => m.suffix ? a[m.key]+m.suffix : a[m.key])];
-      while (vals.length < COLS) vals.push('');
-      row = addDataRow(vals.slice(0, COLS), mi%2===1);
-      boldLabel(row.getCell(1));
-      for (let ci = 2; ci <= chunk.length+1; ci++) boldValue(row.getCell(ci), m.color);
-    });
-  }
-  addSpacer();
+    // ======================== OVERALL RATES ========================
+    addSection('OVERALL RATES', C.blue);
+    addTableHeader(['Metric', 'Count', 'Total', 'Rate', '', ''], C.blue);
+    row = addDataRow(['Overall Answer Rate', s.overallAnswered, total, ((s.overallAnswered/total)*100).toFixed(1)+'%', '', '']);
+    boldValue(row.getCell(4), C.navy);
+    row = addDataRow(['PTP Rate', s.overallPtp, total, ((s.overallPtp/total)*100).toFixed(1)+'%', '', ''], true);
+    boldValue(row.getCell(4), C.green);
+    addSpacer();
 
-  // ======================== PER-ATTEMPT DETAIL SECTIONS ========================
-  attData.forEach((att, i) => {
-    const accent = attemptAccents[i % attemptAccents.length];
-    const light = attemptLights[i % attemptLights.length];
+    setStep('calc', 'Writing breakdown sections...');
+    await nextFrame();
 
-    // Attempt title bar
-    addTitle('ATTEMPT ' + att.num + ' \u2014 DETAILED BREAKDOWN', accent);
-
-    // Key metrics in 2-column layout
-    addSection('KEY METRICS', accent);
-    const mPairs = [
-      ['Calls Triggered', att.triggered, 'Answered', att.answered],
-      ['Answer Rate', att.ansRate+'%', 'PTP Rate', att.ptpRate+'%'],
-      ['PTP Count', att.ptp, 'Total Cost', '\u20B9 '+att.totalCost],
-      ['Avg Duration', att.avgDur+'s', 'Max Duration', att.maxDur+'s'],
-    ];
-    mPairs.forEach((p, pi) => {
-      row = addDataRow([p[0], p[1], '', p[2], p[3], ''], pi%2===1, light, light);
-      boldLabel(row.getCell(1)); boldValue(row.getCell(2), C.navy);
-      boldLabel(row.getCell(4)); boldValue(row.getCell(5), C.green);
-    });
-
-    // BOT/IVR STATUS + DISPOSITION side by side
-    const sCounts = att.sCol ? countMap(att.sCol) : [];
-    const dCounts = att.dpCol ? countMap(att.dpCol) : [];
-    const maxR = Math.max(sCounts.length, dCounts.length);
-    if (maxR > 0) {
-      addTableHeader(['BOT/IVR STATUS', 'Count', '%', 'DISPOSITION', 'Count', '%'], accent, C.green);
-      for (let ri = 0; ri < maxR; ri++) {
-        const sE = sCounts[ri], dE = dCounts[ri];
+    // ======================== BOT/IVR STATUS + DISPOSITION SIDE BY SIDE ========================
+    if (s.overallStatusCol || s.overallDispCol) {
+      const sCounts = Object.entries(s.overallStatusCounts).sort((a,b)=>b[1]-a[1]);
+      const dCounts = Object.entries(s.overallDispCounts).sort((a,b)=>b[1]-a[1]);
+      const maxR = Math.max(sCounts.length, dCounts.length);
+      addTableHeader(['BOT/IVR STATUS', 'Count', '%', 'DISPOSITION', 'Count', '%'], C.orange, C.green);
+      for (let i = 0; i < maxR; i++) {
+        const sE = sCounts[i], dE = dCounts[i];
         row = addDataRow([
           sE?sE[0]:'', sE?sE[1]:'', sE?((sE[1]/total)*100).toFixed(1)+'%':'',
           dE?dE[0]:'', dE?dE[1]:'', dE?((dE[1]/total)*100).toFixed(1)+'%':''
-        ], ri%2===1, light, C.greenLight);
-        if (sE) boldValue(row.getCell(3), accent);
+        ], i%2===1, C.orangeLight, C.greenLight);
+        if (sE) boldValue(row.getCell(3), C.orange);
         if (dE) boldValue(row.getCell(6), C.green);
       }
+      addSpacer();
+    }
+
+    // ======================== ATTEMPT COMPARISON TABLE ========================
+    addSection('ATTEMPT COMPARISON', C.navy);
+    const maxAttCols = Math.min(s.attempts.length, 5);
+    for (let block = 0; block < s.attempts.length; block += maxAttCols) {
+      const chunk = s.attempts.slice(block, block + maxAttCols);
+      if (block > 0) addSpacer();
+      const hdrVals = ['Metric', ...chunk.map(a => 'Attempt '+a.num)];
+      while (hdrVals.length < COLS) hdrVals.push('');
+      const hdrRow = ws.addRow(hdrVals.slice(0, COLS));
+      hdrRow.height = 22;
+      hdrRow.eachCell((c, ci) => {
+        c.font = { bold:true, size:10, color:{argb:C.white} };
+        c.fill = { type:'pattern', pattern:'solid', fgColor:{argb: ci===1 ? C.navy : (attemptAccents[(block+ci-2)%attemptAccents.length])} };
+        c.alignment = { vertical:'middle', horizontal: ci===1?'left':'center' };
+        c.border = border;
+      });
+      const metrics = [
+        { label:'Calls Triggered', key:'triggered', color:C.navy },
+        { label:'Answered', key:'answered', color:C.navy },
+        { label:'Answer Rate', key:'answerRate', color:C.blue, suffix:'%' },
+        { label:'PTP Count', key:'ptpCount', color:C.green },
+        { label:'PTP Rate', key:'ptpRate', color:C.green, suffix:'%' },
+        { label:'Avg Duration (s)', key:'avgDur', color:C.navy },
+        { label:'Max Duration (s)', key:'maxDur', color:C.navy },
+        { label:'Total Cost (\u20B9)', key:'totalCost', color:C.green, format: v => Number(v).toFixed(2) },
+      ];
+      metrics.forEach((m, mi) => {
+        const vals = [m.label, ...chunk.map(a => { let v = a[m.key]; if (m.format) v = m.format(v); return m.suffix ? v+m.suffix : v; })];
+        while (vals.length < COLS) vals.push('');
+        row = addDataRow(vals.slice(0, COLS), mi%2===1);
+        boldLabel(row.getCell(1));
+        for (let ci = 2; ci <= chunk.length+1; ci++) boldValue(row.getCell(ci), m.color);
+      });
     }
     addSpacer();
-    addSpacer();
-  });
 
-  // Download
-  const baseName = fileName.replace(/\.[^.]+$/, '');
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = baseName + '_stats_report.xlsx';
-  a.click(); URL.revokeObjectURL(url);
+    // ======================== PER-ATTEMPT DETAIL SECTIONS ========================
+    for (let i = 0; i < s.attempts.length; i++) {
+      const att = s.attempts[i];
+      const accent = attemptAccents[i % attemptAccents.length];
+      const light = attemptLights[i % attemptLights.length];
+
+      setStep('render', `Building Attempt ${att.num} section...`);
+      await nextFrame();
+
+      addTitle('ATTEMPT ' + att.num + ' \u2014 DETAILED BREAKDOWN', accent);
+      addSection('KEY METRICS', accent);
+      const mPairs = [
+        ['Calls Triggered', att.triggered, 'Answered', att.answered],
+        ['Answer Rate', att.answerRate+'%', 'PTP Rate', att.ptpRate+'%'],
+        ['PTP Count', att.ptpCount, 'Total Cost', '\u20B9 '+att.totalCost.toFixed(2)],
+        ['Avg Duration', att.avgDur+'s', 'Max Duration', att.maxDur+'s'],
+      ];
+      mPairs.forEach((p, pi) => {
+        row = addDataRow([p[0], p[1], '', p[2], p[3], ''], pi%2===1, light, light);
+        boldLabel(row.getCell(1)); boldValue(row.getCell(2), C.navy);
+        boldLabel(row.getCell(4)); boldValue(row.getCell(5), C.green);
+      });
+
+      const sCounts = att.statusCounts;
+      const dCounts = att.dispCounts;
+      const maxR = Math.max(sCounts.length, dCounts.length);
+      if (maxR > 0) {
+        addTableHeader(['BOT/IVR STATUS', 'Count', '%', 'DISPOSITION', 'Count', '%'], accent, C.green);
+        for (let ri = 0; ri < maxR; ri++) {
+          const sE = sCounts[ri], dE = dCounts[ri];
+          row = addDataRow([
+            sE?sE[0]:'', sE?sE[1]:'', sE?((sE[1]/total)*100).toFixed(1)+'%':'',
+            dE?dE[0]:'', dE?dE[1]:'', dE?((dE[1]/total)*100).toFixed(1)+'%':''
+          ], ri%2===1, light, C.greenLight);
+          if (sE) boldValue(row.getCell(3), accent);
+          if (dE) boldValue(row.getCell(6), C.green);
+        }
+      }
+      addSpacer();
+      addSpacer();
+    }
+
+    // Download
+    setStep('render', 'Generating file...');
+    await nextFrame();
+    const baseName = fileName.replace(/\.[^.]+$/, '');
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = baseName + '_stats_report.xlsx';
+    a.click(); URL.revokeObjectURL(url);
+    completeProgress();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('progressOverlay').classList.add('hidden');
+    alert('Export failed: ' + err.message);
+  }
 }
 </script>
 </body>
