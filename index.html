@@ -91,6 +91,10 @@
   .dur-cell { color: #1565c0; }
   .zero-cell { color: #999; }
 
+  /* File Banner */
+  .file-banner { background: #e8eaf6; border: 1px solid #c5cae9; border-radius: 8px; padding: 10px 18px; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; font-size: .9rem; color: #1a237e; font-weight: 600; }
+  .file-banner .file-icon { font-size: 1.2rem; }
+
   .hidden { display: none !important; }
 
   /* Pricing Editor */
@@ -195,6 +199,12 @@
     <p>Click or drag &amp; drop your <strong>CSV / Excel (.xlsx)</strong> file here</p>
     <div class="hint">File should contain columns like DURATION_1_ATTEMPT, DURATION_2_ATTEMPT, etc.</div>
     <input type="file" id="fileInput" accept=".csv,.xlsx,.xls">
+  </div>
+
+  <!-- File Name Banner -->
+  <div class="file-banner hidden" id="fileBanner">
+    <span class="file-icon">&#128196;</span>
+    <span id="fileName"></span>
   </div>
 
   <!-- Progress Overlay -->
@@ -485,6 +495,8 @@ function setCalcProgress(done, total) {
 function nextFrame() { return new Promise(r => requestAnimationFrame(r)); }
 
 function handleFile(file) {
+  document.getElementById('fileName').textContent = file.name;
+  document.getElementById('fileBanner').classList.remove('hidden');
   showProgress('Processing: ' + file.name);
   setStep('read', `File size: ${(file.size / 1024).toFixed(1)} KB`);
 
@@ -701,11 +713,13 @@ function renderBreakdown() {
     const nonZero = durations.filter(d => d > 0);
     const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
     const maxDur = Math.max(...durations);
-    const answerRate = allRows.length ? ((nonZero.length / allRows.length) * 100).toFixed(1) : '0.0';
-
-    // Attempt-wise BOT/IVR_STATUS & DISPOSITION
+    // Calls triggered = rows where this attempt's status/dialed column is non-blank
     const attemptNum = dc.replace(/\D/g, '') || (i+1);
+    const dialedAttemptCol = headers.find(h => h === `DIALED_DATETIME_${attemptNum}_ATTEMPT`);
     const statusAttemptCol = headers.find(h => h === `BOT/IVR_STATUS_${attemptNum}_ATTEMPT`);
+    const triggerCol = statusAttemptCol || dialedAttemptCol;
+    const triggered = triggerCol ? allRows.filter(r => String(r[triggerCol] || '').trim() !== '').length : nonZero.length;
+    const answerRate = triggered ? ((nonZero.length / triggered) * 100).toFixed(1) : '0.0';
     const dispAttemptCol = headers.find(h => h === `DISPOSITION_${attemptNum}_ATTEMPT`);
 
     // Count statuses for this attempt
@@ -746,7 +760,8 @@ function renderBreakdown() {
     card.className = 'attempt-card';
     card.innerHTML = `
       <div class="attempt-name">Attempt ${num}</div>
-      <div class="stat"><span>Non-zero entries</span><span class="val">${nonZero.length.toLocaleString()} / ${allRows.length.toLocaleString()}</span></div>
+      <div class="stat"><span>Calls Triggered</span><span class="val">${triggered.toLocaleString()} / ${allRows.length.toLocaleString()}</span></div>
+      <div class="stat"><span>Answered Entries</span><span class="val">${nonZero.length.toLocaleString()}</span></div>
       <div class="stat"><span>Answer Rate</span><span class="val" style="color:#1a237e;font-size:.95rem">${answerRate}%</span></div>
       <div class="stat"><span>PTP Rate</span><span class="val" style="color:#2e7d32;font-size:.95rem">${ptpAttemptRate}% <small style="color:#888;font-weight:400">(${ptpAttemptCount.toLocaleString()})</small></span></div>
       <div class="stat"><span>Avg Duration</span><span class="val">${avgDur.toFixed(1)}s</span></div>
