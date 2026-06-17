@@ -223,6 +223,9 @@
     <div class="summary-card"><div class="label">Total Records</div><div class="value" id="totalRecords">0</div></div>
     <div class="summary-card"><div class="label">Attempts Found</div><div class="value" id="totalAttempts">0</div></div>
     <div class="summary-card total"><div class="label">Grand Total Cost</div><div class="value" id="grandTotal">&#8377; 0.00</div></div>
+    <div class="summary-card" style="display:flex;align-items:center;justify-content:center;cursor:pointer;background:#e8f5e9;border:1px solid #c8e6c9;" onclick="exportStats()">
+      <div style="text-align:center"><div class="label" style="color:#2e7d32;">Export</div><div class="value" style="color:#2e7d32;font-size:1rem;">&#x1F4E5; Stats Report</div></div>
+    </div>
   </div>
 
   <!-- Answer Rate & Disposition Stats -->
@@ -275,6 +278,8 @@
 
 <!-- SheetJS for Excel parsing -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<!-- ExcelJS for styled Excel export -->
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 
 <script>
 const DEFAULT_PRICING = [
@@ -862,6 +867,280 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
 });
+
+// Export Stats CSV
+async function exportStats() {
+  if (!allRows.length) return;
+  const total = allRows.length;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Billing App';
+
+  function countMap(col) {
+    const m = {};
+    allRows.forEach(r => { const v = String(r[col]||'').trim()||'(Blanks)'; m[v]=(m[v]||0)+1; });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  }
+
+  // Color palette
+  const C = {
+    navy:     'FF1A237E', navyLight: 'FFE8EAF6', navyMid: 'FFC5CAE9',
+    green:    'FF2E7D32', greenLight:'FFE8F5E9', greenMid: 'FFC8E6C9',
+    orange:   'FFE65100', orangeLight:'FFFFF3E0',
+    red:      'FFC62828', redLight:  'FFFCE4EC',
+    white:    'FFFFFFFF', black:     'FF333333',
+    gray:     'FFF5F5F5', grayBorder:'FFE0E0E0', grayText:'FF888888',
+    blue:     'FF1565C0', blueLight: 'FFE3F2FD',
+  };
+
+  const thin = { style: 'thin', color: { argb: C.grayBorder } };
+  const border = { top: thin, bottom: thin, left: thin, right: thin };
+
+  // Style helpers
+  function styleTitle(row) {
+    row.height = 36;
+    row.eachCell(c => {
+      c.font = { bold: true, size: 16, color: { argb: C.white } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } };
+      c.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+  }
+  function styleSectionHeader(row, color) {
+    row.height = 26;
+    row.eachCell(c => {
+      c.font = { bold: true, size: 11, color: { argb: C.white } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: color || C.navy } };
+      c.alignment = { vertical: 'middle' };
+      c.border = border;
+    });
+  }
+  function styleTableHeader(row) {
+    row.height = 22;
+    row.eachCell(c => {
+      c.font = { bold: true, size: 10, color: { argb: C.navy } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navyLight } };
+      c.alignment = { vertical: 'middle' };
+      c.border = border;
+    });
+  }
+  function styleDataRow(row, altBg) {
+    row.eachCell(c => {
+      c.font = { size: 10, color: { argb: C.black } };
+      if (altBg) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.gray } };
+      c.border = border;
+      c.alignment = { vertical: 'middle' };
+    });
+  }
+  function styleMetricLabel(cell) {
+    cell.font = { bold: true, size: 10, color: { argb: C.navy } };
+  }
+  function styleMetricValue(cell, color) {
+    cell.font = { bold: true, size: 11, color: { argb: color || C.black } };
+    cell.alignment = { horizontal: 'right', vertical: 'middle' };
+  }
+
+  // ==================== SHEET 1: Summary ====================
+  const ws1 = wb.addWorksheet('Summary', { properties: { tabColor: { argb: C.navy } } });
+  ws1.columns = [{ width: 34 },{ width: 18 },{ width: 16 },{ width: 20 },{ width: 22 }];
+
+  const fileName = document.getElementById('fileName').textContent || 'N/A';
+  const grand = allRows.reduce((s, r) => s + r.TOTAL_COST, 0);
+  const overallAnswered = allRows.filter(r => durationCols.some(dc => (parseFloat(r[dc]) || 0) > 0)).length;
+  const dispCol = headers.find(h => /^DISPOSITION$/i.test(h));
+  const statusCol = headers.find(h => /^BOT\/IVR_STATUS$/i.test(h) || /^BOT\/IVR.STATUS$/i.test(h));
+  let ptpCount = 0;
+  if (dispCol) allRows.forEach(r => { if (String(r[dispCol]||'').trim().toUpperCase() === 'PTP') ptpCount++; });
+
+  // Title
+  let r = ws1.addRow(['STATS REPORT']); ws1.mergeCells(1,1,1,5); styleTitle(r);
+  ws1.addRow([]);
+
+  // File Info
+  r = ws1.addRow(['FILE INFORMATION']); ws1.mergeCells(3,1,3,5); styleSectionHeader(r, C.navy);
+  r = ws1.addRow(['File Name', fileName, '', 'Generated On', new Date().toLocaleString()]);
+  styleDataRow(r); styleMetricLabel(r.getCell(1)); styleMetricLabel(r.getCell(4));
+  r = ws1.addRow(['Total Records', total, '', 'Attempts Found', durationCols.length]);
+  styleDataRow(r, true); styleMetricLabel(r.getCell(1)); styleMetricValue(r.getCell(2), C.navy); styleMetricLabel(r.getCell(4)); styleMetricValue(r.getCell(5), C.navy);
+  r = ws1.addRow(['Grand Total Cost', '\u20B9 ' + grand.toFixed(2)]);
+  styleDataRow(r); styleMetricLabel(r.getCell(1)); styleMetricValue(r.getCell(2), C.green);
+  r.getCell(2).font = { bold: true, size: 13, color: { argb: C.green } };
+  ws1.addRow([]);
+
+  // Overall Rates
+  r = ws1.addRow(['OVERALL RATES']); ws1.mergeCells(ws1.rowCount,1,ws1.rowCount,5); styleSectionHeader(r, C.blue);
+  r = ws1.addRow(['Metric', 'Count', 'Total', 'Rate']); styleTableHeader(r);
+  r = ws1.addRow(['Overall Answer Rate', overallAnswered, total, ((overallAnswered/total)*100).toFixed(1) + '%']);
+  styleDataRow(r); styleMetricValue(r.getCell(4), C.navy);
+  r = ws1.addRow(['PTP Rate', ptpCount, total, ((ptpCount/total)*100).toFixed(1) + '%']);
+  styleDataRow(r, true); styleMetricValue(r.getCell(4), C.green);
+  ws1.addRow([]);
+
+  // BOT/IVR STATUS
+  if (statusCol) {
+    r = ws1.addRow(['BOT/IVR STATUS BREAKDOWN']); ws1.mergeCells(ws1.rowCount,1,ws1.rowCount,5); styleSectionHeader(r, C.orange);
+    r = ws1.addRow(['Status', 'Count', 'Percentage']); styleTableHeader(r);
+    countMap(statusCol).forEach(([label, count], idx) => {
+      r = ws1.addRow([label, count, ((count/total)*100).toFixed(1) + '%']);
+      styleDataRow(r, idx % 2 === 1); styleMetricValue(r.getCell(3), C.orange);
+    });
+    ws1.addRow([]);
+  }
+
+  // DISPOSITION
+  if (dispCol) {
+    r = ws1.addRow(['DISPOSITION BREAKDOWN']); ws1.mergeCells(ws1.rowCount,1,ws1.rowCount,5); styleSectionHeader(r, C.green);
+    r = ws1.addRow(['Disposition', 'Count', 'Percentage']); styleTableHeader(r);
+    countMap(dispCol).forEach(([label, count], idx) => {
+      r = ws1.addRow([label, count, ((count/total)*100).toFixed(1) + '%']);
+      styleDataRow(r, idx % 2 === 1); styleMetricValue(r.getCell(3), C.green);
+    });
+  }
+
+  // ==================== SHEET 2: Attempt Comparison ====================
+  const ws2 = wb.addWorksheet('Attempt Comparison', { properties: { tabColor: { argb: C.blue } } });
+  const compMetrics = ['Calls Triggered','Answered','Answer Rate','PTP Count','PTP Rate','Avg Duration (s)','Max Duration (s)','Total Cost (\u20B9)'];
+  const compVals = compMetrics.map(() => []);
+  const attemptNums = [];
+
+  durationCols.forEach((dc, i) => {
+    const attemptNum = dc.replace(/\D/g,'') || (i+1);
+    attemptNums.push('Attempt ' + attemptNum);
+    const durations = allRows.map(r => parseFloat(r[dc]) || 0);
+    const nonZero = durations.filter(d => d > 0);
+    const totalDur = durations.reduce((a,b) => a+b, 0);
+    const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
+    const maxDur = Math.max(...durations);
+    const costs = allRows.map(r => r[costCols[i]]);
+    const totalCost = costs.reduce((a,b) => a+b, 0);
+    const sCol = headers.find(h => h === `BOT/IVR_STATUS_${attemptNum}_ATTEMPT`);
+    const dCol = headers.find(h => h === `DIALED_DATETIME_${attemptNum}_ATTEMPT`);
+    const tCol = sCol || dCol;
+    const triggered = tCol ? allRows.filter(r => String(r[tCol]||'').trim() !== '').length : nonZero.length;
+    const ansRate = triggered ? ((nonZero.length/triggered)*100).toFixed(1) : '0.0';
+    const dpCol = headers.find(h => h === `DISPOSITION_${attemptNum}_ATTEMPT`);
+    let ptp = 0;
+    if (dpCol) allRows.forEach(r => { if (String(r[dpCol]||'').trim().toUpperCase()==='PTP') ptp++; });
+
+    compVals[0].push(triggered); compVals[1].push(nonZero.length); compVals[2].push(ansRate+'%');
+    compVals[3].push(ptp); compVals[4].push(((ptp/total)*100).toFixed(1)+'%');
+    compVals[5].push(avgDur.toFixed(1)); compVals[6].push(maxDur); compVals[7].push(totalCost.toFixed(2));
+  });
+
+  ws2.columns = [{ width: 24 }, ...attemptNums.map(() => ({ width: 18 }))];
+  r = ws2.addRow(['ATTEMPT COMPARISON', ...attemptNums.map(() => '')]); ws2.mergeCells(1,1,1,1+attemptNums.length); styleTitle(r);
+  ws2.addRow([]);
+  r = ws2.addRow(['Metric', ...attemptNums]); styleTableHeader(r);
+  // Highlight colors per metric row
+  const metricColors = [C.navy, C.navy, C.blue, C.green, C.green, C.navy, C.navy, C.green];
+  compMetrics.forEach((metric, idx) => {
+    r = ws2.addRow([metric, ...compVals[idx]]);
+    styleDataRow(r, idx % 2 === 1);
+    styleMetricLabel(r.getCell(1));
+    for (let c = 2; c <= 1 + attemptNums.length; c++) {
+      styleMetricValue(r.getCell(c), metricColors[idx]);
+    }
+  });
+
+  // ==================== SHEET per Attempt ====================
+  const attemptColors = [C.navy, C.blue, C.green, C.orange, 'FF6A1B9A', 'FF00695C'];
+  durationCols.forEach((dc, i) => {
+    const attemptNum = dc.replace(/\D/g,'') || (i+1);
+    const accentColor = attemptColors[i % attemptColors.length];
+    const ws = wb.addWorksheet('Attempt ' + attemptNum, { properties: { tabColor: { argb: accentColor } } });
+    ws.columns = [{ width: 32 },{ width: 16 },{ width: 12 },{ width: 30 },{ width: 16 },{ width: 12 }];
+
+    const durations = allRows.map(r => parseFloat(r[dc]) || 0);
+    const nonZero = durations.filter(d => d > 0);
+    const totalDur = durations.reduce((a,b) => a+b, 0);
+    const avgDur = nonZero.length ? (totalDur / nonZero.length) : 0;
+    const maxDur = Math.max(...durations);
+    const costs = allRows.map(r => r[costCols[i]]);
+    const totalCost = costs.reduce((a,b) => a+b, 0);
+    const sAtCol = headers.find(h => h === `BOT/IVR_STATUS_${attemptNum}_ATTEMPT`);
+    const dAtCol = headers.find(h => h === `DIALED_DATETIME_${attemptNum}_ATTEMPT`);
+    const tCol = sAtCol || dAtCol;
+    const triggered = tCol ? allRows.filter(r => String(r[tCol]||'').trim() !== '').length : nonZero.length;
+    const ansRate = triggered ? ((nonZero.length/triggered)*100).toFixed(1) : '0.0';
+    const dpAtCol = headers.find(h => h === `DISPOSITION_${attemptNum}_ATTEMPT`);
+    let ptp = 0;
+    if (dpAtCol) allRows.forEach(r => { if (String(r[dpAtCol]||'').trim().toUpperCase()==='PTP') ptp++; });
+
+    // Title
+    r = ws.addRow(['ATTEMPT ' + attemptNum + ' \u2014 DETAILED REPORT']); ws.mergeCells(1,1,1,6); styleTitle(r);
+    r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: accentColor } };
+    ws.addRow([]);
+
+    // Key Metrics
+    r = ws.addRow(['KEY METRICS']); ws.mergeCells(3,1,3,6); styleSectionHeader(r, accentColor);
+
+    const metrics = [
+      ['Calls Triggered', triggered, '', 'Answered', nonZero.length, ''],
+      ['Answer Rate', ansRate + '%', '', 'PTP Rate', ((ptp/total)*100).toFixed(1) + '%', ''],
+      ['PTP Count', ptp, '', 'Total Cost', '\u20B9 ' + totalCost.toFixed(2), ''],
+      ['Avg Duration', avgDur.toFixed(1) + 's', '', 'Max Duration', maxDur + 's', ''],
+    ];
+    metrics.forEach((vals, idx) => {
+      r = ws.addRow(vals);
+      styleDataRow(r, idx % 2 === 1);
+      styleMetricLabel(r.getCell(1)); styleMetricValue(r.getCell(2), C.navy);
+      styleMetricLabel(r.getCell(4)); styleMetricValue(r.getCell(5), C.green);
+    });
+    ws.addRow([]);
+
+    // BOT/IVR STATUS + DISPOSITION side by side
+    const sCounts = sAtCol ? countMap(sAtCol) : [];
+    const dCounts = dpAtCol ? countMap(dpAtCol) : [];
+    const maxDataRows = Math.max(sCounts.length, dCounts.length);
+
+    if (maxDataRows > 0) {
+      r = ws.addRow(['BOT/IVR STATUS', 'Count', '%', 'DISPOSITION', 'Count', '%']);
+      r.height = 24;
+      // Left header (cols 1-3) in orange
+      [1,2,3].forEach(c => {
+        r.getCell(c).font = { bold: true, size: 10, color: { argb: C.white } };
+        r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.orange } };
+        r.getCell(c).border = border;
+        r.getCell(c).alignment = { vertical: 'middle' };
+      });
+      // Right header (cols 4-6) in green
+      [4,5,6].forEach(c => {
+        r.getCell(c).font = { bold: true, size: 10, color: { argb: C.white } };
+        r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.green } };
+        r.getCell(c).border = border;
+        r.getCell(c).alignment = { vertical: 'middle' };
+      });
+
+      for (let ri = 0; ri < maxDataRows; ri++) {
+        const sE = sCounts[ri];
+        const dE = dCounts[ri];
+        r = ws.addRow([
+          sE ? sE[0] : '', sE ? sE[1] : '', sE ? ((sE[1]/total)*100).toFixed(1)+'%' : '',
+          dE ? dE[0] : '', dE ? dE[1] : '', dE ? ((dE[1]/total)*100).toFixed(1)+'%' : ''
+        ]);
+        r.eachCell((c, colNum) => {
+          c.font = { size: 10, color: { argb: C.black } };
+          c.border = border;
+          c.alignment = { vertical: 'middle' };
+          if (ri % 2 === 1) {
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum <= 3 ? C.orangeLight : C.greenLight } };
+          }
+          if (colNum === 3) styleMetricValue(c, C.orange);
+          if (colNum === 6) styleMetricValue(c, C.green);
+        });
+      }
+    }
+  });
+
+  // Download
+  const baseName = fileName.replace(/\.[^.]+$/, '');
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = baseName + '_stats_report.xlsx';
+  a.click();
+  URL.revokeObjectURL(url);
+}
 </script>
 </body>
 </html>
