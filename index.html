@@ -126,6 +126,15 @@
 
   .pricing-row-display { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; font-size: .82rem; }
 
+  /* Profile Selector */
+  .profile-selector { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .profile-selector label { font-size: .85rem; font-weight: 600; color: #1a237e; white-space: nowrap; }
+  .profile-selector select { padding: 7px 12px; border: 1px solid #c5cae9; border-radius: 6px; font-size: .85rem; background: #fff; color: #333; min-width: 220px; cursor: pointer; }
+  .profile-selector select:focus { outline: none; border-color: #1a237e; box-shadow: 0 0 0 2px rgba(26,35,126,.15); }
+  .profile-info { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .profile-info-chip { background: #e8eaf6; border-radius: 6px; padding: 5px 12px; font-size: .78rem; color: #1a237e; font-weight: 500; }
+  .profile-info-chip .chip-label { color: #666; font-weight: 400; }
+
   /* Progress Overlay */
   .progress-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(3px); }
   .progress-box { background: #fff; border-radius: 14px; padding: 35px 40px; min-width: 380px; max-width: 480px; box-shadow: 0 8px 32px rgba(0,0,0,.25); text-align: center; }
@@ -174,6 +183,14 @@
         <button class="btn-sm btn-reset" onclick="resetPricing()">Reset Default</button>
       </div>
     </div>
+    <!-- Profile Selector -->
+    <div class="profile-selector">
+      <label for="profileSelect">Billing Profile:</label>
+      <select id="profileSelect" onchange="onProfileChange()">
+        <option value="custom">Custom (Default)</option>
+      </select>
+    </div>
+    <div class="profile-info hidden" id="profileInfo"></div>
     <!-- View Mode -->
     <div id="pricingViewMode">
       <div class="pricing-row-display" id="pricingGrid"></div>
@@ -289,8 +306,227 @@ const DEFAULT_PRICING = [
   [420, 20.50], [450, 22.00], [480, 23.50], [999, 25.00]
 ];
 
+// Billing profiles from API
+const BILLING_PROFILES = [
+  {
+    profile_id: "profile_001", profile_name: "cred billing", project_id: "project_004",
+    channel_pricing: { sms_cost_per_unit: 2.0, whatsapp_cost_per_message: 5.0, email_cost_per_unit: 2.0 },
+    voice_pricing: [
+      { min_seconds: 1, max_seconds: 30, cost_per_call: 3.0 },
+      { min_seconds: 31, max_seconds: 60, cost_per_call: 3.5 },
+      { min_seconds: 61, max_seconds: 90, cost_per_call: 4.0 },
+      { min_seconds: 91, max_seconds: 120, cost_per_call: 5.0 },
+      { min_seconds: 121, max_seconds: 150, cost_per_call: 6.0 },
+      { min_seconds: 151, max_seconds: 180, cost_per_call: 7.0 },
+      { min_seconds: 181, max_seconds: 210, cost_per_call: 8.0 },
+      { min_seconds: 211, max_seconds: 240, cost_per_call: 9.0 },
+      { min_seconds: 241, max_seconds: 270, cost_per_call: 10.0 },
+      { min_seconds: 271, max_seconds: 300, cost_per_call: 11.0 }
+    ],
+    default_voice_cost: 10.5
+  },
+  {
+    profile_id: "profile_002", profile_name: "Tata capital", project_id: "project_008",
+    channel_pricing: { sms_cost_per_unit: 0.128, whatsapp_cost_per_message: 3.2, email_cost_per_unit: 1.5 },
+    voice_pricing: [
+      { min_seconds: 0, max_seconds: 7, cost_per_call: 0.0 },
+      { min_seconds: 8, max_seconds: 15, cost_per_call: 0.75 },
+      { min_seconds: 16, max_seconds: 30, cost_per_call: 1.5 },
+      { min_seconds: 31, max_seconds: 60, cost_per_call: 2.5 },
+      { min_seconds: 61, max_seconds: 90, cost_per_call: 4.0 },
+      { min_seconds: 91, max_seconds: 120, cost_per_call: 5.5 },
+      { min_seconds: 121, max_seconds: 150, cost_per_call: 7.0 },
+      { min_seconds: 151, max_seconds: 180, cost_per_call: 8.5 },
+      { min_seconds: 181, max_seconds: 210, cost_per_call: 10.0 },
+      { min_seconds: 211, max_seconds: 240, cost_per_call: 11.5 },
+      { min_seconds: 241, max_seconds: 270, cost_per_call: 13.0 },
+      { min_seconds: 271, max_seconds: 300, cost_per_call: 14.5 },
+      { min_seconds: 301, max_seconds: 330, cost_per_call: 16.0 },
+      { min_seconds: 331, max_seconds: 360, cost_per_call: 17.5 },
+      { min_seconds: 361, max_seconds: 390, cost_per_call: 19.0 },
+      { min_seconds: 391, max_seconds: 420, cost_per_call: 20.5 },
+      { min_seconds: 421, max_seconds: 450, cost_per_call: 22.0 },
+      { min_seconds: 451, max_seconds: 480, cost_per_call: 23.5 },
+      { min_seconds: 481, max_seconds: 999, cost_per_call: 25.0 }
+    ],
+    default_voice_cost: 3.5
+  },
+  {
+    profile_id: "profile_003", profile_name: "Ugro", project_id: "project_005",
+    channel_pricing: { sms_cost_per_unit: 3.0 },
+    voice_pricing: [
+      { min_seconds: 0, max_seconds: 30, cost_per_call: 1.25 },
+      { min_seconds: 31, max_seconds: 60, cost_per_call: 2.5 },
+      { min_seconds: 61, max_seconds: 90, cost_per_call: 3.75 },
+      { min_seconds: 91, max_seconds: 120, cost_per_call: 5 },
+      { min_seconds: 121, max_seconds: 150, cost_per_call: 6.25 },
+      { min_seconds: 151, max_seconds: 180, cost_per_call: 7.5 },
+      { min_seconds: 181, max_seconds: 210, cost_per_call: 8.75 },
+      { min_seconds: 211, max_seconds: 240, cost_per_call: 10 },
+      { min_seconds: 241, max_seconds: 270, cost_per_call: 11.25 },
+      { min_seconds: 271, max_seconds: 300, cost_per_call: 12.5 },
+      { min_seconds: 301, max_seconds: 330, cost_per_call: 13.75 },
+      { min_seconds: 331, max_seconds: 360, cost_per_call: 15 }
+    ],
+    default_voice_cost: 25.0
+  },
+  {
+    profile_id: "profile_004", profile_name: "Micro-fi", project_id: "project_009",
+    channel_pricing: { sms_cost_per_unit: 0.128, email_cost_per_unit: 1.5, whatsapp_cost_per_message: 0.18 },
+    voice_pricing: [
+      { min_seconds: 0, max_seconds: 7, cost_per_call: 0.0 },
+      { min_seconds: 8, max_seconds: 15, cost_per_call: 0.75 },
+      { min_seconds: 16, max_seconds: 30, cost_per_call: 1.5 },
+      { min_seconds: 31, max_seconds: 60, cost_per_call: 2.5 },
+      { min_seconds: 61, max_seconds: 90, cost_per_call: 4.0 },
+      { min_seconds: 91, max_seconds: 120, cost_per_call: 5.5 },
+      { min_seconds: 121, max_seconds: 150, cost_per_call: 7.0 },
+      { min_seconds: 151, max_seconds: 180, cost_per_call: 8.5 },
+      { min_seconds: 181, max_seconds: 210, cost_per_call: 10.0 },
+      { min_seconds: 211, max_seconds: 240, cost_per_call: 11.5 },
+      { min_seconds: 241, max_seconds: 270, cost_per_call: 13.0 },
+      { min_seconds: 271, max_seconds: 300, cost_per_call: 14.5 },
+      { min_seconds: 301, max_seconds: 330, cost_per_call: 16.0 },
+      { min_seconds: 331, max_seconds: 360, cost_per_call: 17.5 },
+      { min_seconds: 361, max_seconds: 390, cost_per_call: 19.0 },
+      { min_seconds: 391, max_seconds: 420, cost_per_call: 20.5 },
+      { min_seconds: 421, max_seconds: 450, cost_per_call: 22.0 },
+      { min_seconds: 451, max_seconds: 480, cost_per_call: 23.5 },
+      { min_seconds: 481, max_seconds: 999, cost_per_call: 25.0 }
+    ],
+    default_voice_cost: 3.0
+  },
+  {
+    profile_id: "profile_005", profile_name: "Bajaj", project_id: "project_007",
+    channel_pricing: { sms_cost_per_unit: 3.0 },
+    voice_pricing: [
+      { min_seconds: 1, max_seconds: 30, cost_per_call: 1.35 },
+      { min_seconds: 31, max_seconds: 60, cost_per_call: 2.7 },
+      { min_seconds: 61, max_seconds: 90, cost_per_call: 4.05 },
+      { min_seconds: 91, max_seconds: 120, cost_per_call: 5.4 },
+      { min_seconds: 121, max_seconds: 150, cost_per_call: 6.75 },
+      { min_seconds: 151, max_seconds: 999, cost_per_call: 8.1 }
+    ],
+    default_voice_cost: 25.0
+  },
+  {
+    profile_id: "profile_006", profile_name: "Kissht",
+    channel_pricing: { sms_cost_per_unit: 3.0 },
+    voice_pricing: [
+      { min_seconds: 0, max_seconds: 5, cost_per_call: 0.0 },
+      { min_seconds: 6, max_seconds: 60, cost_per_call: 3.0 },
+      { min_seconds: 61, max_seconds: 120, cost_per_call: 6.0 },
+      { min_seconds: 121, max_seconds: 180, cost_per_call: 9.0 },
+      { min_seconds: 181, max_seconds: 240, cost_per_call: 12.0 },
+      { min_seconds: 241, max_seconds: 300, cost_per_call: 15.0 },
+      { min_seconds: 301, max_seconds: 360, cost_per_call: 18.0 },
+      { min_seconds: 361, max_seconds: 420, cost_per_call: 21.0 },
+      { min_seconds: 421, max_seconds: 480, cost_per_call: 24.0 },
+      { min_seconds: 481, max_seconds: 540, cost_per_call: 27.0 },
+      { min_seconds: 541, max_seconds: 600, cost_per_call: 30.0 }
+    ],
+    default_voice_cost: 25.0
+  },
+  {
+    profile_id: "profile_007", profile_name: "Marketing", project_id: "project_013",
+    channel_pricing: { sms_cost_per_unit: 3.0 },
+    voice_pricing: [
+      { min_seconds: 0, max_seconds: 7, cost_per_call: 0 },
+      { min_seconds: 8, max_seconds: 15, cost_per_call: 0.75 },
+      { min_seconds: 16, max_seconds: 30, cost_per_call: 1.5 },
+      { min_seconds: 31, max_seconds: 60, cost_per_call: 2.5 },
+      { min_seconds: 61, max_seconds: 90, cost_per_call: 4 },
+      { min_seconds: 91, max_seconds: 120, cost_per_call: 5.5 },
+      { min_seconds: 121, max_seconds: 150, cost_per_call: 7 },
+      { min_seconds: 151, max_seconds: 180, cost_per_call: 8.5 },
+      { min_seconds: 181, max_seconds: 210, cost_per_call: 10 },
+      { min_seconds: 211, max_seconds: 240, cost_per_call: 11.5 },
+      { min_seconds: 241, max_seconds: 270, cost_per_call: 13 },
+      { min_seconds: 271, max_seconds: 300, cost_per_call: 14.5 },
+      { min_seconds: 301, max_seconds: 330, cost_per_call: 16 },
+      { min_seconds: 331, max_seconds: 360, cost_per_call: 17.5 },
+      { min_seconds: 361, max_seconds: 390, cost_per_call: 19 },
+      { min_seconds: 391, max_seconds: 420, cost_per_call: 20.5 },
+      { min_seconds: 421, max_seconds: 450, cost_per_call: 22 },
+      { min_seconds: 451, max_seconds: 480, cost_per_call: 23.5 },
+      { min_seconds: 481, max_seconds: 999, cost_per_call: 25 }
+    ],
+    default_voice_cost: 25.0
+  }
+];
+
 // Load from localStorage or use default
 let PRICING = JSON.parse(localStorage.getItem('billingPricing')) || JSON.parse(JSON.stringify(DEFAULT_PRICING));
+let selectedProfileId = localStorage.getItem('selectedProfileId') || 'custom';
+
+// Populate profile dropdown
+function populateProfileDropdown() {
+  const select = document.getElementById('profileSelect');
+  BILLING_PROFILES.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.profile_id;
+    opt.textContent = p.profile_name;
+    select.appendChild(opt);
+  });
+  select.value = selectedProfileId;
+  showProfileInfo();
+}
+
+function onProfileChange() {
+  const select = document.getElementById('profileSelect');
+  selectedProfileId = select.value;
+  localStorage.setItem('selectedProfileId', selectedProfileId);
+
+  if (selectedProfileId === 'custom') {
+    PRICING = JSON.parse(localStorage.getItem('billingPricing')) || JSON.parse(JSON.stringify(DEFAULT_PRICING));
+    document.getElementById('pricingViewActions').classList.remove('hidden');
+  } else {
+    const profile = BILLING_PROFILES.find(p => p.profile_id === selectedProfileId);
+    if (profile) {
+      PRICING = profile.voice_pricing.map(v => [v.max_seconds, v.cost_per_call]);
+      // Hide edit/reset when using a profile
+      document.getElementById('pricingViewActions').classList.add('hidden');
+      // If in edit mode, cancel it
+      cancelEdit();
+    }
+  }
+
+  showProfileInfo();
+  renderPricingGrid();
+  if (rawRows.length) processData(rawRows);
+}
+
+function showProfileInfo() {
+  const infoDiv = document.getElementById('profileInfo');
+  if (selectedProfileId === 'custom') {
+    infoDiv.classList.add('hidden');
+    infoDiv.innerHTML = '';
+    return;
+  }
+  const profile = BILLING_PROFILES.find(p => p.profile_id === selectedProfileId);
+  if (!profile) { infoDiv.classList.add('hidden'); return; }
+
+  const chips = [];
+  const cp = profile.channel_pricing;
+  if (cp.sms_cost_per_unit != null) chips.push(`<span class="profile-info-chip"><span class="chip-label">SMS:</span> \u20B9${cp.sms_cost_per_unit}</span>`);
+  if (cp.whatsapp_cost_per_message != null) chips.push(`<span class="profile-info-chip"><span class="chip-label">WhatsApp:</span> \u20B9${cp.whatsapp_cost_per_message}</span>`);
+  if (cp.email_cost_per_unit != null) chips.push(`<span class="profile-info-chip"><span class="chip-label">Email:</span> \u20B9${cp.email_cost_per_unit}</span>`);
+  if (profile.default_voice_cost != null) chips.push(`<span class="profile-info-chip"><span class="chip-label">Default Voice:</span> \u20B9${profile.default_voice_cost}</span>`);
+
+  infoDiv.innerHTML = chips.join('');
+  infoDiv.classList.remove('hidden');
+}
+
+populateProfileDropdown();
+
+// Apply saved profile on load
+if (selectedProfileId !== 'custom') {
+  const savedProfile = BILLING_PROFILES.find(p => p.profile_id === selectedProfileId);
+  if (savedProfile) {
+    PRICING = savedProfile.voice_pricing.map(v => [v.max_seconds, v.cost_per_call]);
+    document.getElementById('pricingViewActions').classList.add('hidden');
+  }
+}
 
 function getCost(duration) {
   if (duration == null || isNaN(duration) || duration === '' || duration === 0) return 0;
@@ -389,6 +625,11 @@ function savePricing() {
 
   PRICING = newPricing;
   localStorage.setItem('billingPricing', JSON.stringify(PRICING));
+  // Switch to custom profile
+  selectedProfileId = 'custom';
+  localStorage.setItem('selectedProfileId', 'custom');
+  document.getElementById('profileSelect').value = 'custom';
+  showProfileInfo();
   renderPricingGrid();
   cancelEdit();
 
@@ -400,6 +641,10 @@ function resetPricing() {
   if (!confirm('Reset pricing to default values?')) return;
   PRICING = JSON.parse(JSON.stringify(DEFAULT_PRICING));
   localStorage.removeItem('billingPricing');
+  selectedProfileId = 'custom';
+  localStorage.setItem('selectedProfileId', 'custom');
+  document.getElementById('profileSelect').value = 'custom';
+  showProfileInfo();
   renderPricingGrid();
   if (rawRows.length) processData(rawRows);
 }
